@@ -1,0 +1,58 @@
+# ============================================================================
+# predict-score — the daily forecast run.
+#
+# 12:37 UTC = 19:37 WIB / 20:37 WITA & SGT: late enough in the local day that
+# today's observed average is nearly complete (it is the persistence anchor and
+# the regression's lag term), early enough that tomorrow's call is on the user's
+# phone before bedtime, when the "can I run in the morning?" decision is made.
+#
+# ---------------------------------------------------------------------------
+# There is no scoring step, and that is by design
+# ---------------------------------------------------------------------------
+# `prediction_scores` and `model_accuracy` (0002_views.sql) are views joining
+# predictions to `daily_aq`. The moment the rollup below lands an actual for a
+# date some prediction named, that prediction is scored. Nothing writes a score,
+# so nothing can fail to write one, and a re-run cannot double-count.
+#
+# The rollup runs first so predict.ts reads the freshest possible anchor.
+# ============================================================================
+name: predict-score
+
+on:
+  schedule:
+    - cron: '37 12 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: predict-score
+  cancel-in-progress: false
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # Wider than the 3-day ingestion window: this is the run that finalises
+      # yesterday's actual, and a late-arriving hour from four days ago should
+      # still be able to correct a score.
+      - name: Roll up the trailing 5 local days
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run rollup -- --days 5
+
+      - name: Predict horizons 1-3 for every location
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run predict

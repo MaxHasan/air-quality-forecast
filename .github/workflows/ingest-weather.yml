@@ -1,0 +1,59 @@
+# ============================================================================
+# ingest-weather — hourly weather per location, four times a day.
+#
+# Weather moves slower than air quality and Open-Meteo is a courtesy rather than
+# a contract: 8 locations x 4 runs is 32 calls a day against a ~10k/day budget.
+#
+# The times (01/07/13/19 UTC = 08/14/20/02 WIB) spread the pull across the day
+# so that every run of predict.ts has weather no more than six hours old, and
+# `past_days=2` means each run also re-writes the previous two days — Open-Meteo
+# revises recent hours as real observations arrive, so this is a correction
+# mechanism as much as a catch-up one.
+#
+# No secret for Open-Meteo: it is keyless (CC-BY, attributed on /about).
+# ============================================================================
+name: ingest-weather
+
+on:
+  schedule:
+    - cron: '29 1,7,13,19 * * *'
+  workflow_dispatch:
+    inputs:
+      past_days:
+        description: 'Trailing days to fetch (max 92 — use a large value once, after setup, to backfill)'
+        required: false
+        default: '2'
+
+concurrency:
+  group: ingest-weather
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Ingest Open-Meteo weather
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run ingest:weather -- --past-days ${{ github.event.inputs.past_days || '2' }}
+
+      # Weather rollups feed the wind term the regression is fitted on, so they
+      # are recomputed here too. The window follows past_days so that a manual
+      # backfill dispatch rolls up everything it just fetched.
+      - name: Roll up daily weather
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run rollup -- --days ${{ github.event.inputs.past_days || '3' }}

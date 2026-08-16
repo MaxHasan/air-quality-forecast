@@ -1,0 +1,68 @@
+# ============================================================================
+# keepalive — a weekly heartbeat commit.
+#
+# GitHub disables scheduled workflows in a repository with no commit activity
+# for 60 days. This repo is **public**, and it is meant to run untouched for
+# months at a time — a personal app that quietly stops forecasting after two
+# months of not being edited is precisely the failure mode to design out.
+#
+# (The 60-day rule is documented as applying to public repositories. Whether it
+# also catches private ones has never been worth finding out: one commit a week
+# is cheaper than the outage.)
+#
+# Note this is insurance against *workflow* disabling only. The Supabase
+# free-tier pause is a separate hazard, handled by the two-hourly PostgREST
+# traffic from ingest-aq — a commit here does not touch the database.
+#
+# Sunday 06:11 UTC, well away from every other schedule in the repo.
+# ============================================================================
+name: keepalive
+
+on:
+  schedule:
+    - cron: '11 6 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+# The default GITHUB_TOKEN is read-only in many org configurations; this job
+# needs to push, and asks for exactly that and nothing else.
+permissions:
+  contents: write
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the heartbeat and push
+        run: |
+          set -euo pipefail
+          mkdir -p .github
+          {
+            echo "# Keepalive heartbeat"
+            echo
+            echo "Written weekly by .github/workflows/keepalive.yml so that GitHub does not"
+            echo "disable this repository's scheduled workflows after 60 days without commits."
+            echo "Nothing reads this file."
+            echo
+            echo "last run: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          } > .github/keepalive.md
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/keepalive.md
+
+          # `git commit` exits non-zero when there is nothing staged. That is a
+          # success here, not a failure: it means the file is already current.
+          if git diff --staged --quiet; then
+            echo 'Heartbeat unchanged — nothing to commit.'
+          else
+            git commit -m 'chore: weekly keepalive heartbeat'
+            git push
+          fi

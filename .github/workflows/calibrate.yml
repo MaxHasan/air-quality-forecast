@@ -1,0 +1,54 @@
+# ============================================================================
+# calibrate — refit the wind regression. Manual only.
+#
+# Deliberately not scheduled. A refit changes what the app predicts, and it is
+# only worth doing when there is materially more data than last time — roughly
+# quarterly, or once a cold-start region (Bali, the Singapore regions) has
+# accumulated ~90 scored days.
+#
+# The default is a dry run: it prints the fit, the holdout comparison and the
+# acceptance gates, and writes nothing. Flip `write` to true only after reading
+# that output. The gates in fit-wind-model.ts will refuse to write a model whose
+# wind coefficient is not negative and significant, but a script that passes its
+# gates can still be a model you would rather look at first.
+#
+# Note the build-time fit reads `data/historical/`, which is gitignored: those
+# Nafas CSVs were shared privately and must not be committed. Until backfill.ts
+# can refit from `daily_aq` in the database, this workflow is only useful for a
+# DB-sourced refit — run the archive fit locally.
+# ============================================================================
+name: calibrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      write:
+        description: 'Write the fitted coefficients to model_coefficients (otherwise report only)'
+        type: boolean
+        required: true
+        default: false
+
+concurrency:
+  group: calibrate
+  cancel-in-progress: false
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Fit and report
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run calibrate -- --sql ${{ github.event.inputs.write == 'true' && '--write' || '' }}

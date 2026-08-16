@@ -1,0 +1,61 @@
+# ============================================================================
+# ingest-aq — hourly PM2.5 ground truth, every two hours.
+#
+# This is the load-bearing workflow. It is also, incidentally, the Supabase
+# free-tier keep-alive: a project with no external traffic for ~7 days gets
+# paused, and pg_cron alone does not reliably prevent it because it never
+# touches the API layer. Twelve PostgREST writes a day do.
+#
+# `:17` rather than `:00`: GitHub's scheduled-workflow queue is busiest on the
+# hour and runs get delayed or dropped there. Every job in this repo is
+# idempotent over a trailing window, so drift is survivable — but not being run
+# at all is not, so we stay out of the crowd.
+#
+# The rollup runs in the same job rather than as a separate workflow, because it
+# only has work to do once new observations exist. `--days 3` recomputes today
+# plus the two days the ingestion catch-up window can revise.
+# ============================================================================
+name: ingest-aq
+
+on:
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+
+# One at a time. Overlapping runs would both upsert the same hour — harmless
+# thanks to the unique keys, but it doubles the writes and makes the run log
+# hard to read. `cancel-in-progress: false` so a slow run finishes rather than
+# being killed mid-batch by the next tick.
+concurrency:
+  group: ingest-aq
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Ingest WAQI + data.gov.sg
+        env:
+          WAQI_TOKEN: ${{ secrets.WAQI_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run ingest:aq
+
+      # Runs even if ingestion came back `partial` (exit 0) — and deliberately
+      # not on a hard failure, where there is nothing new to roll up.
+      - name: Roll up the trailing 3 local days
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run rollup -- --days 3

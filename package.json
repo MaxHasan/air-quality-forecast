@@ -15,7 +15,8 @@
     "ingest:weather": "tsx scripts/ingest/weather.ts",
     "rollup": "tsx scripts/rollup.ts",
     "predict": "tsx scripts/predict.ts",
-    "discover:stations": "tsx scripts/discover-stations.ts"
+    "discover:stations": "tsx scripts/discover-stations.ts",
+    "calibrate": "tsx scripts/calibrate/fit-wind-model.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

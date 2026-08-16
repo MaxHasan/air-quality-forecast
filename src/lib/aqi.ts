@@ -131,21 +131,29 @@ export const AQI_TABLES: Readonly<Record<AqiTableId, AqiBreakpointTable>> = {
 } as const;
 
 /**
- * PROVISIONAL. The table used when a caller does not name one.
+ * VERIFIED — the table WAQI publishes its `iaqi` sub-indices against.
  *
- * WAQI does not document which revision its `iaqi` sub-indices use, and the
- * difference is material at exactly the concentrations Jakarta lives at
- * (an AQI of 51 is 12.1 µg/m³ here but 9.1 µg/m³ under the 2024 table).
- * Defaulting to the pre-2024 table only because it is the long-standing
- * convention of third-party AQI displays — this is an assumption, not a fact.
+ * Established empirically on 2026-08-16 by co-locating Singapore, the one place
+ * where the same air is reported both ways: WAQI carries the NEA feeds as AQI
+ * sub-indices, and data.gov.sg publishes the same regional readings as native
+ * µg/m³. Matching on WAQI's own `time.iso` (its feed runs ~1 hour behind
+ * data.gov.sg, so aligning on wall-clock "now" compares different hours and
+ * produces nonsense), for the 20:00 SGT hour:
  *
- * VERIFICATION TASK (M2A, before any model consumes Indonesian data):
- * co-locate a Singapore hour — read the WAQI feed for an NEA station (AQI)
- * and the data.gov.sg v2 `pm25` feed for the same region and hour (native
- * µg/m³), invert the WAQI value with both tables, and keep the one that
- * matches. Record the outcome here, in `aq_observations.aqi_table`, and in the
- * README. Stored rows carry the table they were converted with, so a wrong
- * guess is a recoverable UPDATE, not a re-fetch.
+ *   region   truth µg/m³   WAQI AQI   pre-2024   2024 revision
+ *   central      35           99         99          99          (degenerate)
+ *   south        22           72         72          75
+ *   north        26           80         80          82
+ *   east         27           82         82          84
+ *   west         23           74         74          77
+ *
+ * pre-2024 matched 5/5 exactly; the 2024 revision is excluded by 4 of the 5
+ * (central cannot discriminate — both tables agree at 35 µg/m³).
+ *
+ * Re-run `npm run verify:aqi-table` if WAQI ever migrates to the 2024
+ * breakpoints. Every stored row carries the table it was converted with in
+ * `aq_observations.aqi_table`, so a migration would be a recoverable UPDATE
+ * rather than a re-fetch.
  */
 export const DEFAULT_PM25_BREAKPOINTS: AqiBreakpointTable = EPA_PM25_BREAKPOINTS_PRE_2024;
 

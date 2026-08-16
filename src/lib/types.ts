@@ -208,13 +208,26 @@ export interface DailyWeatherRow {
 export type DailyWeatherInsert = Omit<DailyWeatherRow, 'computed_at'> & { computed_at?: IsoTimestamp };
 
 /**
- * Predictor slopes, keyed by the `daily_weather` column they multiply, so
- * `predict.ts` can look them up generically instead of hard-coding positions.
+ * Predictor slopes, keyed by the quantity they multiply, so `predict.ts` looks
+ * them up by name rather than by position — a coefficient set fitted with a
+ * different predictor list stays readable instead of being silently misapplied.
+ *
+ * Known predictor names:
+ *   `wind_speed_avg_ms`  daily-mean 10 m wind for the target day, m/s (always
+ *                        present; a negative slope is the model's whole premise)
+ *   `pm25_lag`           the most recent observed daily mean, µg/m³ — the
+ *                        persistence anchor the shipped specification leans on
+ *   `temp_avg_c`         daily-mean temperature, °C (the earlier weather-only
+ *                        specification; retained so older versions still load)
+ *
+ * Only the wind term is required. See scripts/calibrate/fit-wind-model.ts for
+ * why the shipped model pairs it with the lag rather than with temperature.
  */
 export interface ModelCoefficientMap {
   wind_speed_avg_ms: number;
-  temp_avg_c: number;
-  [predictor: string]: number;
+  pm25_lag?: number;
+  temp_avg_c?: number;
+  [predictor: string]: number | undefined;
 }
 
 /** Fit quality + provenance stored on `model_coefficients.stats`. */

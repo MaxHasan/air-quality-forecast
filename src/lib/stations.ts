@@ -150,34 +150,61 @@ export interface StationConfig {
 }
 
 /**
- * WAQI feeds verified live during planning (2026-08-16).
+ * WAQI feeds, resolved live against the API on 2026-08-16 via
+ * `GET /v2/map/bounds/` over the Jabodetabek and Bali bounding boxes, and each
+ * one confirmed to return a fresh `iaqi.pm25.v`.
  *
- * Bali runs on a single feed, which is the weakest link in the station map:
- * if Padangsambian Kaja goes dormant, Bali loses its ground truth entirely and
- * falls back to CAMS. `scripts/discover-stations.ts` is meant to resolve the
- * Lumintang and Umalas uids to remove that single point of failure.
+ * Two corrections to the original plan, both discovered by actually calling the
+ * API rather than trusting the station list:
+ *
+ * 1. **There are no Nafas feeds on WAQI.** The uids the plan named for Menteng,
+ *    Pondok Aren and Padangsambian Kaja all return `{"status":"error",
+ *    "msg":"Unknown ID"}`. A bounds sweep of Jabodetabek returns 13 stations and
+ *    not one is attributed to Nafas. Indonesian ground truth here is BMKG, KLHK
+ *    (Kementerian Lingkungan Hidup dan Kehutanan) and a single Clarity sensor.
+ *    Nafas remains reachable only through their own app.
+ *
+ * 2. **Bali has exactly one station in range** — Badung Sempidi, ~6 km
+ *    north-west of central Denpasar. There is no redundancy: if it goes dormant,
+ *    Bali falls back to CAMS alone. This is the weakest link in the map.
+ *
+ * The silver lining is @8294: Kemayoran is the *same* BMKG station whose 2022–23
+ * weather the wind model is calibrated on, so Jakarta's ground truth and its
+ * training weather come from one place. It is also the only Indonesian feed that
+ * carries WAQI's 8-day CAMS-derived forecast block.
+ *
+ * WAQI's feeds run roughly one hour behind the observation hour — worth knowing
+ * when reconciling against another source, though well inside STALE_FEED_HOURS.
  */
 export const WAQI_STATIONS: readonly StationConfig[] = [
   {
     locationSlug: 'jakarta-central',
     source: 'waqi',
-    sourceStationId: '556480',
-    name: 'Menteng 2, Central Jakarta',
-    network: 'nafas',
+    sourceStationId: '8294',
+    name: 'Kemayoran, Central Jakarta',
+    network: 'bmkg',
+  },
+  {
+    // Second Jakarta feed so the location survives one station going quiet.
+    locationSlug: 'jakarta-central',
+    source: 'waqi',
+    sourceStationId: '-416842',
+    name: 'Jakarta GBK',
+    network: 'klhk',
   },
   {
     locationSlug: 'bsd',
     source: 'waqi',
-    sourceStationId: '537739',
-    name: 'Pondok Aren, South Tangerang',
-    network: 'nafas',
+    sourceStationId: '-416785',
+    name: 'Tangerang Selatan, Serpong',
+    network: 'klhk',
   },
   {
     locationSlug: 'bali-denpasar',
     source: 'waqi',
-    sourceStationId: '503785',
-    name: 'Padangsambian Kaja, Denpasar',
-    network: null,
+    sourceStationId: '-519205',
+    name: 'Badung Sempidi, Bali',
+    network: 'klhk',
   },
 ] as const;
 

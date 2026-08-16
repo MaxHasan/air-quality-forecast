@@ -11,12 +11,14 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "ingest:aq": "tsx scripts/ingest/aq.ts",
-    "ingest:weather": "tsx scripts/ingest/weather.ts",
-    "rollup": "tsx scripts/rollup.ts",
-    "predict": "tsx scripts/predict.ts",
-    "discover:stations": "tsx scripts/discover-stations.ts",
-    "calibrate": "tsx scripts/calibrate/fit-wind-model.ts"
+    "ingest:aq": "tsx --env-file-if-exists=.env.local scripts/ingest/aq.ts",
+    "ingest:weather": "tsx --env-file-if-exists=.env.local scripts/ingest/weather.ts",
+    "rollup": "tsx --env-file-if-exists=.env.local scripts/rollup.ts",
+    "predict": "tsx --env-file-if-exists=.env.local scripts/predict.ts",
+    "retention": "tsx --env-file-if-exists=.env.local scripts/retention.ts",
+    "discover:stations": "tsx --env-file-if-exists=.env.local scripts/discover-stations.ts",
+    "verify:aqi-table": "tsx --env-file-if-exists=.env.local scripts/verify-aqi-table.ts",
+    "calibrate": "tsx --env-file-if-exists=.env.local scripts/calibrate/fit-wind-model.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

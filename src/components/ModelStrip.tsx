@@ -26,7 +26,19 @@ export function ModelStrip({ models, headlineModel }: ModelStripProps) {
           <span className={m.model === headlineModel ? 'font-semibold text-foreground' : ''}>
             {MODEL_SHORT_LABELS[m.model]} {formatPm25(m.predicted_pm25)}
           </span>
-          <span className="opacity-70">{m.mae !== null ? `(MAE ${formatMetric(m.mae)})` : '(calibrating)'}</span>
+          {/*
+            Deliberately NOT the word "calibrating". That word is already taken
+            on this screen by the card-level badge, where it means "no wind
+            model has been fitted for this location". Here it would mean
+            something quite different — the model exists and has produced this
+            number, it simply has not been scored against a realised day yet.
+            Jakarta showed both at once ("Wind 38 (calibrating)" on a card with
+            no CALIBRATING badge), which reads as if the forecast cannot be
+            trusted when the only missing thing is its track record.
+          */}
+          <span className="opacity-70">
+            {m.mae !== null ? `(MAE ${formatMetric(m.mae)})` : '(unscored)'}
+          </span>
         </li>
       ))}
     </ul>

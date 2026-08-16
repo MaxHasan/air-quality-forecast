@@ -1,5 +1,21 @@
+/**
+ * The fixture contract.
+ *
+ * These assert against `@/lib/mock-data` directly rather than through
+ * `@/lib/data`, which since M4 defaults to the live Supabase reads and would
+ * make this file a network test. The mock path through the seam is covered in
+ * tests/queries.test.ts ("the data seam"); everything below is unchanged in
+ * substance from when `data.ts` re-exported these functions.
+ */
 import { describe, expect, it } from 'vitest';
-import { getDailyHistory, getHourlyPm25, getIngestionHealth, getLocationForecast, getLocationForecasts, getModelAccuracy } from '@/lib/data';
+import {
+  getDailyHistory,
+  getHourlyPm25,
+  getIngestionHealth,
+  getLocationForecast,
+  getLocationForecasts,
+  getModelAccuracy,
+} from '@/lib/mock-data';
 import { LOCATIONS, MIN_HOURS_FOR_SCORING, MIN_SCORED_DAYS_FOR_RANKING } from '@/lib/stations';
 
 describe('mock data seam', () => {
@@ -91,14 +107,27 @@ describe('mock data seam', () => {
     expect(rows.some((r) => r.location_slug === 'jakarta-central' && r.model === 'wind_regression')).toBe(true);
   });
 
-  it('shows the wind model beating cams and persistence at horizon 1 for Jakarta (the hybrid payoff)', async () => {
+  it('reproduces the backtest crossover: persistence leads at h=1, the wind model overtakes at h=2 and h=3', async () => {
     const rows = await getModelAccuracy();
-    const h1 = rows.filter((r) => r.location_slug === 'jakarta-central' && r.horizon_days === 1);
-    const wind = h1.find((r) => r.model === 'wind_regression')!;
-    const cams = h1.find((r) => r.model === 'cams')!;
-    const persistence = h1.find((r) => r.model === 'persistence')!;
-    expect(wind.mae).toBeLessThan(cams.mae);
-    expect(cams.mae).toBeLessThan(persistence.mae);
+    const at = (slug: string, horizon: number, model: string) =>
+      rows.find((r) => r.location_slug === slug && r.horizon_days === horizon && r.model === model)!.mae;
+
+    // Every location with a fitted wind model must tell the same story, not just
+    // whichever one the fixture noise happened to favour.
+    for (const slug of ['jakarta-central', 'bsd'] as const) {
+      expect(at(slug, 1, 'persistence')).toBeLessThan(at(slug, 1, 'wind_regression'));
+      expect(at(slug, 2, 'wind_regression')).toBeLessThan(at(slug, 2, 'persistence'));
+      expect(at(slug, 3, 'wind_regression')).toBeLessThan(at(slug, 3, 'persistence'));
+      // Persistence decays with horizon; the wind model barely moves. That
+      // divergence, not a flat win, is what the crossover rests on.
+      expect(at(slug, 3, 'persistence') - at(slug, 1, 'persistence')).toBeGreaterThan(
+        at(slug, 3, 'wind_regression') - at(slug, 1, 'wind_regression'),
+      );
+      // CAMS is never the best call at any horizon — a 40 km grid over a city.
+      for (const horizon of [1, 2, 3] as const) {
+        expect(at(slug, horizon, 'cams')).toBeGreaterThan(at(slug, horizon, 'wind_regression'));
+      }
+    }
   });
 
   it('reports a non-trivial failure streak for the footer', async () => {

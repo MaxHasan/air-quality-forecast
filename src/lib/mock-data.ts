@@ -430,11 +430,32 @@ function buildDailySeries(slug: LocationSlug): DailySeries {
 /* Model accuracy (30-day skill per location x model x horizon)              */
 /* -------------------------------------------------------------------------- */
 
-/** Base (horizon-1) MAE and per-horizon growth factor per model tier — the "hybrid design payoff": wind < cams < persistence. */
+/**
+ * Base (horizon-1) MAE and per-horizon growth factor per model tier.
+ *
+ * These numbers used to show the wind model winning at every horizon. The
+ * backtest in scripts/calibrate/fit-wind-model.ts found the opposite close in,
+ * and it is the more interesting result: daily PM2.5 is strongly autocorrelated,
+ * so naive persistence is very hard to beat one day out (Central Jakarta holdout:
+ * 6.29 MAE against the hybrid's 7.41). What persistence cannot do is hold that
+ * advantage — it decays fast with horizon while the wind model barely moves, so
+ * the ranking inverts by h=2 and the gap widens at h=3.
+ *
+ * The fixtures are shaped to that finding rather than to the flattering version,
+ * because a mock that quietly promises a win the real model does not deliver sets
+ * expectations that production then has to disappoint. The per-horizon winner
+ * selection in `model_accuracy` is what turns the crossover into an advantage —
+ * which is precisely why all three models are shipped and scored.
+ *
+ *            h=1     h=2     h=3
+ *   persist.  6.3     8.3    11.0     best close in, decays fastest
+ *   wind      7.4     7.5     7.5     nearly flat — overtakes from h=2
+ *   cams      8.6     9.4    10.2     coarse 40 km grid throughout
+ */
 const ACCURACY_TIER: Readonly<Record<ModelName, { baseMae: number; growth: number; baseRmseMult: number }>> = {
-  wind_regression: { baseMae: 4.5, growth: 1.25, baseRmseMult: 1.28 },
-  cams: { baseMae: 8.0, growth: 1.1, baseRmseMult: 1.22 },
-  persistence: { baseMae: 9.5, growth: 1.32, baseRmseMult: 1.2 },
+  wind_regression: { baseMae: 7.4, growth: 1.01, baseRmseMult: 1.28 },
+  cams: { baseMae: 8.6, growth: 1.09, baseRmseMult: 1.22 },
+  persistence: { baseMae: 6.3, growth: 1.32, baseRmseMult: 1.2 },
 };
 
 /** Scored-day counts per location — the thing that gates whether MAE is trustworthy. */
@@ -470,10 +491,16 @@ function buildModelAccuracy(): ModelAccuracyRow[] {
     const lastScored = addLocalDays(today, -1)!; // today isn't finished yet
     const firstScored = addLocalDays(lastScored, -(n - 1))!;
 
+    // One wobble per *location*, shared by its models, rather than one per
+    // (location, model). A location that is intrinsically harder to forecast is
+    // harder for every model at once — and, more importantly here, a shared
+    // multiplier cannot reorder the tiers, so the persistence-then-wind crossover
+    // above holds at every location instead of being scrambled by ±15% noise.
+    const wobble = 0.85 + seededRng(`accuracy-wobble:${loc.slug}`)() * 0.3;
+
     for (const model of modelsForLocation(loc.slug)) {
       const tier = ACCURACY_TIER[model];
       const rnd = seededRng(`accuracy:${loc.slug}:${model}`);
-      const wobble = 0.85 + rnd() * 0.3; // +/- 15% per-location texture
 
       for (const horizon of [1, 2, 3] as const) {
         const mae = round1(tier.baseMae * tier.growth ** (horizon - 1) * wobble);

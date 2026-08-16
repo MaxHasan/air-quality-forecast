@@ -31,7 +31,18 @@ export function DailyForecastChart({ points }: DailyForecastChartProps) {
     const models = new Set<ModelName>();
     for (const p of points) for (const m of Object.keys(p.predicted) as ModelName[]) models.add(m);
 
-    const lastHistoryIdx = points.findIndex((p) => p.actual_pm25 === null) - 1;
+    // The anchor is the *most recent* day carrying an observation, found from the
+    // end. Scanning forward for the first gap was equivalent while history came
+    // from fixtures, where every past day had a value — but live history is
+    // sparse wherever a feed was down, and a gap on day 2 would anchor "Today"
+    // (and the point every forecast line diverges from) on day 1 of thirty.
+    let lastHistoryIdx = -1;
+    for (let i = points.length - 1; i >= 0; i -= 1) {
+      if (points[i].actual_pm25 !== null) {
+        lastHistoryIdx = i;
+        break;
+      }
+    }
     const anchorIdx = lastHistoryIdx >= 0 ? lastHistoryIdx : points.length - 1;
 
     const chartData = points.map((p, i) => {

@@ -1,26 +1,98 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --surface: #ffffff;
+  --surface-border: #e2e8f0;
+  --surface-muted: #f1f5f9;
+  --muted: #64748b;
+  --accent: #0d9488;
+  --accent-foreground: #ffffff;
+
+  --positive: #15803d;
+  --positive-bg: #dcfce7;
+  --positive-border: #bbf7d0;
+  --warning: #92400e;
+  --warning-bg: #fef3c7;
+  --warning-border: #fde68a;
+  --negative: #b91c1c;
+  --negative-bg: #fee2e2;
+  --negative-border: #fecaca;
+
+  --chart-pm25: #0d9488;
+  --chart-wind: #6366f1;
+  --chart-grid: #e2e8f0;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-border: var(--surface-border);
+  --color-surface-muted: var(--surface-muted);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-positive: var(--positive);
+  --color-positive-bg: var(--positive-bg);
+  --color-positive-border: var(--positive-border);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-border: var(--warning-border);
+  --color-negative: var(--negative);
+  --color-negative-bg: var(--negative-bg);
+  --color-negative-border: var(--negative-border);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0a0f1a;
+    --foreground: #e2e8f0;
+    --surface: #131b2c;
+    --surface-border: #253147;
+    --surface-muted: #1a2436;
+    --muted: #94a3b8;
+    --accent: #2dd4bf;
+    --accent-foreground: #05221f;
+
+    --positive: #4ade80;
+    --positive-bg: #14351f;
+    --positive-border: #1e4d2b;
+    --warning: #fbbf24;
+    --warning-bg: #3a2a08;
+    --warning-border: #57400c;
+    --negative: #f87171;
+    --negative-bg: #3a1414;
+    --negative-border: #571c1c;
+
+    --chart-pm25: #2dd4bf;
+    --chart-wind: #a5b4fc;
+    --chart-grid: #253147;
   }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Horizontal-scroll chart containers: the page itself must never scroll
+   sideways, only the chart's own box, per the design brief. */
+.chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }

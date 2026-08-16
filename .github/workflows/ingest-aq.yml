@@ -1,10 +1,26 @@
 # ============================================================================
-# ingest-aq — hourly PM2.5 ground truth, every two hours.
+# ingest-aq — hourly PM2.5 ground truth.
 #
 # This is the load-bearing workflow. It is also, incidentally, the Supabase
 # free-tier keep-alive: a project with no external traffic for ~7 days gets
 # paused, and pg_cron alone does not reliably prevent it because it never
-# touches the API layer. Twelve PostgREST writes a day do.
+# touches the API layer. Twenty-four PostgREST writes a day do.
+#
+# WHY HOURLY AND NOT EVERY TWO HOURS
+# The two sources behave completely differently, and the cadence has to serve
+# the weaker one:
+#   * data.gov.sg takes `date=` and returns a WHOLE DAY of hourly readings, so
+#     Singapore lands 23-24 hours per day from a single call at any cadence.
+#   * WAQI has no history endpoint — `/feed/` returns only the CURRENT hour.
+#     Indonesian coverage is therefore exactly "one hour per run".
+# At every two hours that caps Jakarta, BSD and Bali at 12 hours a day, against
+# a MIN_HOURS_FOR_SCORING of exactly 12 (src/lib/stations.ts). Zero margin: one
+# delayed or dropped run — and GitHub's scheduler drops runs routinely — and
+# the day falls below the bar, silently making those locations unscorable and
+# starving the accuracy tracker of the ground truth it exists to measure.
+# Hourly gives ~24 and a comfortable margin. The cost is negligible: four WAQI
+# feeds plus two data.gov.sg calls per run, and Actions minutes are unmetered
+# on a public repo.
 #
 # `:17` rather than `:00`: GitHub's scheduled-workflow queue is busiest on the
 # hour and runs get delayed or dropped there. Every job in this repo is
@@ -19,7 +35,7 @@ name: ingest-aq
 
 on:
   schedule:
-    - cron: '17 */2 * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 # One at a time. Overlapping runs would both upsert the same hour — harmless

@@ -17,7 +17,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://air-quality-predictor.vercel.app'),
+  // The deployed origin. Every relative URL in metadata — canonical links,
+  // Open Graph and Twitter images — is resolved against this.
+  //
+  // It previously read `air-quality-predictor.vercel.app`, which is NOT this
+  // app: that subdomain was already claimed by an unrelated create-react-app
+  // project. `.vercel.app` is one global first-come namespace, so an
+  // unverified guess at your own hostname can quietly point your metadata at a
+  // stranger's site.
+  metadataBase: new URL('https://air-quality-forecast.vercel.app'),
   title: {
     default: 'Air Quality Predictor',
     template: '%s · Air Quality Predictor',

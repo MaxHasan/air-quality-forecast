@@ -70,6 +70,43 @@ export function formatHorizon(horizon: HorizonDays): string {
   return horizon === 1 ? 'Tomorrow' : `${horizon} days out`;
 }
 
+/** Direction of tomorrow relative to today, for the card's trend arrow. */
+export type Pm25Trend = 'improving' | 'worsening' | 'steady';
+
+/**
+ * Compare tomorrow's forecast to today's level, with a dead band so ordinary
+ * noise doesn't flap the arrow.
+ *
+ * The band is max(3 µg/m³, 10% of today): the models' holdout MAE runs 6–10
+ * µg/m³, so a 1–2 µg/m³ difference between today and tomorrow is signal-free —
+ * an arrow on it would be theatre. Only a move larger than the band earns a
+ * direction; anything inside it is honestly "about the same".
+ */
+export function pm25Trend(
+  today: number | null | undefined,
+  tomorrow: number | null | undefined,
+): Pm25Trend | null {
+  if (
+    today === null || today === undefined || !Number.isFinite(today) ||
+    tomorrow === null || tomorrow === undefined || !Number.isFinite(tomorrow)
+  ) {
+    return null;
+  }
+  const band = Math.max(3, today * 0.1);
+  if (tomorrow <= today - band) return 'improving';
+  if (tomorrow >= today + band) return 'worsening';
+  return 'steady';
+}
+
+/** Presentation for the trend arrow. Glyph + label, never colour alone. */
+export const TREND_PRESENTATION: Readonly<
+  Record<Pm25Trend, { glyph: string; label: string; toneClass: string }>
+> = {
+  improving: { glyph: '↓', label: 'improving', toneClass: 'text-positive' },
+  worsening: { glyph: '↑', label: 'worsening', toneClass: 'text-negative' },
+  steady: { glyph: '→', label: 'steady', toneClass: 'text-muted' },
+} as const;
+
 /** e.g. `2` -> "2 more scored days" for the /models empty state. */
 export function scoredDaysRemaining(n: number, minRequired: number): number {
   return Math.max(0, minRequired - n);

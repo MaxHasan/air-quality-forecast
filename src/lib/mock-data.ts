@@ -555,6 +555,46 @@ function buildModelPredictions(slug: LocationSlug): ModelPrediction[] {
   return predictions;
 }
 
+/**
+ * The call that was issued yesterday evening *for today* — the left half of the
+ * card's today↔tomorrow comparison.
+ *
+ * Generated as today's underlying value plus the winning model's own error
+ * profile, so "called 38, observed 33 so far" wobbles the way a real forecast
+ * does. Anchored on the synthetic truth rather than the observed rollup,
+ * because the forecast was made the night before regardless of whether the
+ * stations later reported (sg-west's outage must not erase its prediction).
+ */
+function buildTodayPrediction(slug: LocationSlug): ModelPrediction | null {
+  const p = PROFILES[slug];
+  const { history } = buildDailySeries(slug);
+  const todayPoint = history[history.length - 1];
+  if (!p || !todayPoint) return null;
+
+  const rnd = seededRng(`today-pred:${slug}`);
+  const hasWindModel = p.windRegNoiseSd > 0;
+  const model: ModelName = hasWindModel ? 'wind_regression' : 'cams';
+  const noiseSd = hasWindModel ? p.windRegNoiseSd : p.camsNoiseSd;
+  const bias = hasWindModel ? 0 : p.camsBias;
+
+  const base =
+    todayPoint.actual_pm25 ??
+    pm25OnDay(todayPoint.wind_speed_avg_ms ?? p.windBase, p, rnd);
+
+  const acc = buildModelAccuracy().find(
+    (r) => r.location_slug === slug && r.model === model && r.horizon_days === 1,
+  );
+  const n = acc?.n ?? 0;
+
+  return {
+    model,
+    predicted_pm25: round1(clamp(base + bias + gaussian(rnd, noiseSd), 4)),
+    horizon_days: 1,
+    mae: acc && n >= MIN_SCORED_DAYS_FOR_RANKING ? acc.mae : null,
+    n,
+  };
+}
+
 /* -------------------------------------------------------------------------- */
 /* Ingestion health (footer)                                                 */
 /* -------------------------------------------------------------------------- */
@@ -607,6 +647,7 @@ export async function getLocationForecast(slug: LocationSlug): Promise<LocationF
     headline: pickHeadlineModel(models),
     models,
     latest_actual: latestActual,
+    today_prediction: buildTodayPrediction(slug),
     calibrating: isCalibrating(models),
   };
 }

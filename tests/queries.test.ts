@@ -270,6 +270,34 @@ describe('getLocationForecasts', () => {
     expect(jakarta!.models[0].mae).toBe(9.9);
   });
 
+  it('populates today_prediction from a prediction targeting the current local date', async () => {
+    // The side-by-side comparison: yesterday evening's call *for today* rides
+    // along in the same query as tomorrow's forecast.
+    const today = todayFor('jakarta-central');
+    serve({
+      locations: locationRows,
+      stations: [{ id: 1 }],
+      model_accuracy: [],
+      predictions: [
+        prediction('jakarta-central', 'wind_regression', 38.2, 1, today),
+        prediction('jakarta-central', 'wind_regression', 30.1), // tomorrow, h1
+      ],
+      daily_aq: [dailyAq('jakarta-central', today, 33.4, 7, 2)],
+    });
+
+    const jakarta = await queries.getLocationForecast('jakarta-central');
+    expect(jakarta!.today_prediction).not.toBeNull();
+    expect(jakarta!.today_prediction!.predicted_pm25).toBeCloseTo(38.2, 5);
+    // And the two calls are kept apart: tomorrow's headline is not today's number.
+    expect(jakarta!.headline!.predicted_pm25).toBeCloseTo(30.1, 5);
+  });
+
+  it('leaves today_prediction null when nothing ever targeted today', async () => {
+    seedColdStart(); // fixtures only predict tomorrow
+    const jakarta = await queries.getLocationForecast('jakarta-central');
+    expect(jakarta!.today_prediction).toBeNull();
+  });
+
   it('ranks on MAE at horizon 1 once enough days are scored', async () => {
     serve({
       locations: locationRows,

@@ -406,22 +406,25 @@ async function assembleForecasts(locations: readonly LocationRow[]): Promise<Loc
   const ids = locations.map((l) => l.id);
   const targetDates = [...new Set(target.values())];
   const todayDates = [...new Set(today.values())];
+  // Tomorrow's dates for the headline, today's for the side-by-side comparison
+  // ("what was today called at?"). One query serves both.
+  const predictionDates = [...new Set([...targetDates, ...todayDates])];
 
   const [accuracy, predictions, actuals] = await Promise.all([
     getModelAccuracy(),
-    targetDates.length === 0
+    predictionDates.length === 0
       ? Promise.resolve<PredictionSlim[]>([])
       : select<PredictionSlim>('reading predictions', (db) =>
           db
             .from('predictions')
             .select('location_id, target_date, horizon_days, model, predicted_pm25')
             .in('location_id', ids)
-            .in('target_date', targetDates)
+            .in('target_date', predictionDates)
             // Deliberately NOT filtered to horizon 1 — buildModelPredictions
             // picks the lowest horizon present, so a target date still resolves
             // from an older, longer-range run when a nightly job is missed.
-            // At most 3 horizons x 3 models x 8 locations, so fetching all of
-            // them costs nothing.
+            // At most 3 horizons x 3 models x 8 locations x 2 dates, so
+            // fetching all of them costs nothing.
             .order('horizon_days')
             .returns<PredictionSlim[]>(),
         ),
@@ -465,12 +468,18 @@ async function assembleForecasts(locations: readonly LocationRow[]): Promise<Loc
     // The flag therefore requires both to be true.
     const hasHouseModel = models.some((m) => m.model === 'wind_regression');
 
+    // Today's own forecast, chosen by the same winner rule as the headline, so
+    // the side-by-side compares like with like ("winning model's call for
+    // today" next to "winning model's call for tomorrow").
+    const todayModels = todayDate ? buildModelPredictions(location, todayDate, predictions, accuracy) : [];
+
     out.push({
       location,
       target_date: targetDate,
       headline: pickHeadlineModel(models),
       models,
       latest_actual: latestActual,
+      today_prediction: pickHeadlineModel(todayModels),
       calibrating: isCalibrating(models) && !hasHouseModel,
     });
   }

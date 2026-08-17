@@ -610,6 +610,18 @@ export interface LocationForecast {
   models: ModelPrediction[];
   /** Latest observed daily average, for "today vs tomorrow". */
   latest_actual: DailyAqRow | null;
+  /**
+   * The call that was issued *for today* (on an earlier evening, lowest horizon
+   * available), selected by the same winner rule as `headline`.
+   *
+   * Rendered beside tomorrow's number so the card reads as level-and-direction
+   * ("33 today → 30 tomorrow") rather than a lone figure — and, placed next to
+   * `latest_actual`, it lets the reader eyeball forecast-versus-reality every
+   * day, long before /models has accumulated enough scored days to say it
+   * formally. Null until the pipeline has produced a prediction targeting the
+   * current local date.
+   */
+  today_prediction: ModelPrediction | null;
   /** True when no model has enough scored days yet — UI shows "calibrating". */
   calibrating: boolean;
 }

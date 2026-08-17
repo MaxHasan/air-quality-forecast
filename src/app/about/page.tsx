@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { ActivityGuide, AqiScaleTable } from '@/components/AqiScale';
 import { MODEL_DESCRIPTIONS, MODEL_LABELS } from '@/lib/display';
 import { MODEL_FALLBACK_ORDER } from '@/lib/types';
 
@@ -62,6 +63,29 @@ export default function AboutPage() {
           New locations start on CAMS and persistence alone — honestly labelled &quot;calibrating&quot; — until
           enough ground truth accumulates to fit a wind regression of their own.
         </p>
+      </section>
+
+      <section id="reading-the-numbers" className="flex flex-col gap-3 scroll-mt-6">
+        <h2 className="text-lg font-semibold">Reading the numbers</h2>
+        <p className="text-sm leading-relaxed text-muted">
+          The cards show <strong className="text-foreground">PM2.5</strong> — fine particulate matter 2.5 microns
+          or smaller, about a thirtieth of the width of a hair, and the pollutant most strongly tied to health
+          effects. It is measured in µg/m³ (micrograms per cubic meter of air). Many apps show an{' '}
+          <strong className="text-foreground">AQI</strong> instead: an index that maps concentrations onto a 0–500
+          scale with named, colour-coded bands. The two are often confused — an AQI of 155 is about 63 µg/m³, not
+          155. This scale translates between them:
+        </p>
+        <AqiScaleTable />
+        <h3 id="activities" className="pt-2 font-semibold scroll-mt-6">
+          What the verdicts mean
+        </h3>
+        <p className="text-sm leading-relaxed text-muted">
+          One number, three verdicts — because exposure isn&apos;t the same across activities. A hard run moves
+          roughly ten times more air through your lungs than sitting still, and an infant in a stroller breathes
+          more air per kilogram of body weight than an adult, closer to exhaust height. So the bar each activity
+          must clear is different:
+        </p>
+        <ActivityGuide />
       </section>
 
       <section className="flex flex-col gap-3">

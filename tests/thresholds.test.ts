@@ -19,7 +19,7 @@ describe('verdictFor', () => {
   });
 
   it('ranks the three activities strictest-first at a shared concentration', () => {
-    // 30 µg/m³ is a typical Jakarta day: too dirty for the pram, marginal for a
+    // 30 µg/m³ is a typical Jakarta day: too dirty for the stroller, marginal for a
     // run, acceptable for a swim. If this ever inverts, the config is wrong.
     expect(verdictFor('newborn_walk', 30)).toBe('avoid');
     expect(verdictFor('running', 30)).toBe('caution');

@@ -18,7 +18,7 @@
  *
  * - **Newborn walk** is the strictest and is pinned to the WHO guideline. Infants
  *   breathe several times more air per kilogram of body weight than adults, their
- *   lungs are still developing, and a pram sits low — closer to exhaust height.
+ *   lungs are still developing, and a stroller sits low — closer to exhaust height.
  * - **Running** is stricter than general outdoor activity: hard exercise raises
  *   minute ventilation roughly ten-fold and shifts breathing from nose to mouth,
  *   bypassing nasal filtration. An hour's run at 30 µg/m³ delivers a larger dose
@@ -54,12 +54,13 @@ export const ACTIVITY_THRESHOLDS: readonly ActivityThreshold[] = [
   {
     key: 'newborn_walk',
     label: 'Walking the newborn',
-    shortLabel: 'Pram walk',
+    // "Stroller", not "pram" — the owner is American and this is his app.
+    shortLabel: 'Stroller walk',
     icon: '👶',
     goMax: 15,
     cautionMax: 25,
     rationale:
-      'Pinned to the WHO 2021 24-hour guideline (15 µg/m³), with the caution band ending at WHO Interim Target 4 (25). Infants inhale more air per kg of body weight than adults, their lungs are still developing, and a pram rides low — nearer exhaust height than an adult’s airway.',
+      'Pinned to the WHO 2021 24-hour guideline (15 µg/m³), with the caution band ending at WHO Interim Target 4 (25). Infants inhale more air per kg of body weight than adults, their lungs are still developing, and a stroller rides low — nearer exhaust height than an adult’s airway.',
   },
   {
     key: 'running',
@@ -100,7 +101,7 @@ export function thresholdFor(activity: ActivityKey): ActivityThreshold {
  * than defaulting to a reassuring green — the failure mode that would matter
  * here is telling someone the air is fine when we simply do not know.
  *
- * Bounds are inclusive: exactly 15 µg/m³ is still 'go' for a pram walk.
+ * Bounds are inclusive: exactly 15 µg/m³ is still 'go' for a stroller walk.
  */
 export function verdictFor(activity: ActivityKey, pm25: number | null | undefined): Verdict | null {
   if (pm25 === null || pm25 === undefined || !Number.isFinite(pm25) || pm25 < 0) return null;

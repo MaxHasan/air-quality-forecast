@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     template: '%s · Air Quality Forecast',
   },
   description:
-    "Wind-speed-driven PM2.5 forecasts for Jabodetabek, Bali and Singapore — plan a run, a swim, or a pram walk a day ahead.",
+    "Wind-speed-driven PM2.5 forecasts for Jabodetabek, Bali and Singapore — plan a run, a swim, or a stroller walk a day ahead.",
   applicationName: 'Air Quality Forecast',
   icons: {
     icon: [{ url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],

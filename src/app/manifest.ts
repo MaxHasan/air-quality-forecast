@@ -2,8 +2,10 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Air Quality Predictor',
-    short_name: 'AQ Predict',
+    name: 'Air Quality Forecast',
+    // Shown under the home-screen icon, where iOS and Android truncate around
+    // 12 characters — so this has to read as a name at a glance, not a summary.
+    short_name: 'AQ Forecast',
     description:
       "Wind-speed-driven PM2.5 forecasts for Jabodetabek, Bali and Singapore — plan a run, a swim, or a pram walk a day ahead.",
     start_url: '/',

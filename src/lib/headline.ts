@@ -16,23 +16,36 @@ import { MODEL_FALLBACK_ORDER } from './types';
 import type { ModelPrediction } from './types';
 import { MIN_SCORED_DAYS_FOR_RANKING } from './stations';
 
+/**
+ * Ranks whatever the caller hands it, rather than filtering to horizon 1.
+ *
+ * The caller has already chosen one row per model for the target date — the
+ * lowest horizon available (see `buildModelPredictions` in queries.ts) — so by
+ * the time the list arrives here, every entry is the best call that exists for
+ * that day. Re-filtering to `horizon_days === 1` here discarded the whole list
+ * whenever the nightly run had not yet produced h1 rows, and returned null: a
+ * card with three visible model numbers and no headline above them. That is
+ * what the site showed on its first morning live.
+ *
+ * Each entry already carries the MAE for its own horizon, so comparing them is
+ * still like-for-like.
+ */
 export function pickHeadlineModel(models: readonly ModelPrediction[]): ModelPrediction | null {
-  const h1 = models.filter((m) => m.horizon_days === 1);
-  if (h1.length === 0) return null;
+  if (models.length === 0) return null;
 
-  const ranked = h1.filter((m) => m.mae !== null && m.n >= MIN_SCORED_DAYS_FOR_RANKING);
+  const ranked = models.filter((m) => m.mae !== null && m.n >= MIN_SCORED_DAYS_FOR_RANKING);
   if (ranked.length > 0) {
     return ranked.reduce((best, m) => (m.mae! < best.mae! ? m : best));
   }
 
   for (const name of MODEL_FALLBACK_ORDER) {
-    const found = h1.find((m) => m.model === name);
+    const found = models.find((m) => m.model === name);
     if (found) return found;
   }
   return null;
 }
 
-/** True when no model has >= MIN_SCORED_DAYS_FOR_RANKING scored days at horizon 1. */
+/** True when no model has >= MIN_SCORED_DAYS_FOR_RANKING scored days behind it. */
 export function isCalibrating(models: readonly ModelPrediction[]): boolean {
-  return !models.some((m) => m.horizon_days === 1 && m.n >= MIN_SCORED_DAYS_FOR_RANKING);
+  return !models.some((m) => m.n >= MIN_SCORED_DAYS_FOR_RANKING);
 }

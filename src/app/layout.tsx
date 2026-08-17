@@ -27,12 +27,12 @@ export const metadata: Metadata = {
   // stranger's site.
   metadataBase: new URL('https://air-quality-forecast.vercel.app'),
   title: {
-    default: 'Air Quality Predictor',
-    template: '%s · Air Quality Predictor',
+    default: 'Air Quality Forecast',
+    template: '%s · Air Quality Forecast',
   },
   description:
     "Wind-speed-driven PM2.5 forecasts for Jabodetabek, Bali and Singapore — plan a run, a swim, or a pram walk a day ahead.",
-  applicationName: 'Air Quality Predictor',
+  applicationName: 'Air Quality Forecast',
   icons: {
     icon: [{ url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],
     apple: [{ url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],
@@ -68,7 +68,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           <nav className="border-b border-surface-border bg-surface">
             <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 sm:px-6">
               <Link href="/" className="flex items-center gap-2 font-semibold">
-                <span aria-hidden>🌬️</span> Air Quality Predictor
+                <span aria-hidden>🌬️</span> Air Quality Forecast
               </Link>
               <div className="flex gap-4 text-sm">
                 {NAV_LINKS.map((l) => (

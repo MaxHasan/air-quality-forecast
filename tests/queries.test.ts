@@ -204,6 +204,72 @@ describe('getLocationForecasts', () => {
     expect(jakarta!.models.every((m) => m.mae === null && m.n === 0)).toBe(true);
   });
 
+  it('falls back to a longer-horizon call when tonight’s run has not happened yet', async () => {
+    // The failure this guards against, observed live on launch day: predictions
+    // for tomorrow existed only at h2, written by the previous night's run, and
+    // requiring h1 blanked every card on the site. A missed or delayed
+    // scheduled run must degrade to a slightly staler forecast, not to nothing.
+    const tomorrow = tomorrowFor('jakarta-central');
+    serve({
+      locations: locationRows,
+      stations: [{ id: 1 }],
+      model_accuracy: [],
+      predictions: [
+        prediction('jakarta-central', 'persistence', 68.0, 2, tomorrow),
+        prediction('jakarta-central', 'cams', 74.5, 2, tomorrow),
+        prediction('jakarta-central', 'wind_regression', 55.5, 2, tomorrow),
+      ],
+      daily_aq: [dailyAq('jakarta-central', todayFor('jakarta-central'), 68.0, 7, 2)],
+    });
+
+    const jakarta = await queries.getLocationForecast('jakarta-central');
+    expect(jakarta!.models).toHaveLength(3);
+    expect(jakarta!.headline!.predicted_pm25).toBeCloseTo(55.5, 5);
+    // The horizon travels with the number so the UI can say how far ahead it was made.
+    expect(jakarta!.models.every((m) => m.horizon_days === 2)).toBe(true);
+  });
+
+  it('prefers the lowest horizon when several runs cover the same date', async () => {
+    // A date is predicted three times over three nights. The h1 row was issued
+    // closest to the day with the most observed history behind it, so it wins.
+    const tomorrow = tomorrowFor('jakarta-central');
+    serve({
+      locations: locationRows,
+      stations: [{ id: 1 }],
+      model_accuracy: [],
+      predictions: [
+        prediction('jakarta-central', 'wind_regression', 90, 3, tomorrow),
+        prediction('jakarta-central', 'wind_regression', 55.5, 2, tomorrow),
+        prediction('jakarta-central', 'wind_regression', 37.7, 1, tomorrow),
+      ],
+      daily_aq: [dailyAq('jakarta-central', todayFor('jakarta-central'), 37.1, 7, 2)],
+    });
+
+    const jakarta = await queries.getLocationForecast('jakarta-central');
+    expect(jakarta!.models[0].predicted_pm25).toBeCloseTo(37.7, 5);
+    expect(jakarta!.models[0].horizon_days).toBe(1);
+  });
+
+  it('quotes the MAE for the horizon actually shown, not always h1', async () => {
+    // Skill is horizon-specific; pairing an h2 forecast with h1 skill would
+    // flatter it, since accuracy decays as the horizon lengthens.
+    const tomorrow = tomorrowFor('jakarta-central');
+    serve({
+      locations: locationRows,
+      stations: [{ id: 1 }],
+      model_accuracy: [
+        accuracy('jakarta-central', 'wind_regression', 1, 30, 4.0),
+        accuracy('jakarta-central', 'wind_regression', 2, 30, 9.9),
+      ],
+      predictions: [prediction('jakarta-central', 'wind_regression', 55.5, 2, tomorrow)],
+      daily_aq: [dailyAq('jakarta-central', todayFor('jakarta-central'), 68.0, 7, 2)],
+    });
+
+    const jakarta = await queries.getLocationForecast('jakarta-central');
+    expect(jakarta!.models[0].horizon_days).toBe(2);
+    expect(jakarta!.models[0].mae).toBe(9.9);
+  });
+
   it('ranks on MAE at horizon 1 once enough days are scored', async () => {
     serve({
       locations: locationRows,

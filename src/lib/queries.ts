@@ -320,7 +320,24 @@ export async function getModelAccuracy(): Promise<ModelAccuracyRow[]> {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Pair each model's horizon-1 call with its recent skill.
+ * Pair each model's freshest call for `targetDate` with its recent skill.
+ *
+ * **Takes the lowest available horizon rather than requiring horizon 1.**
+ * A given date is predicted three times over three nights — as h3, then h2,
+ * then h1 — so the row for tomorrow at h1 only exists once tonight's job has
+ * run. Demanding h1 meant a single missed run blanked every card on the site,
+ * while a perfectly good two-day-ahead call for that exact date sat unused in
+ * the table. That is not hypothetical: GitHub's scheduler delays and drops
+ * scheduled runs routinely, and it happened here the first day the site was
+ * live.
+ *
+ * Lower horizons are strictly better — the forecast was issued closer to the
+ * day and had more observed history behind it — so the minimum is always the
+ * right pick, and `horizon_days` travels with the value so the UI can say how
+ * far ahead it was made.
+ *
+ * The accuracy lookup uses that same horizon, because MAE is horizon-specific:
+ * quoting h1 skill next to an h2 number would flatter it.
  *
  * `mae` is masked to `null` below `MIN_SCORED_DAYS_FOR_RANKING`, per the
  * `ModelPrediction.mae` contract in types.ts: a mean absolute error over three
@@ -336,20 +353,27 @@ function buildModelPredictions(
   const out: ModelPrediction[] = [];
 
   for (const model of MODEL_FALLBACK_ORDER) {
-    const prediction = predictions.find(
-      (p) => p.location_id === location.id && p.target_date === targetDate && p.horizon_days === 1 && p.model === model,
+    const candidates = predictions.filter(
+      (p) =>
+        p.location_id === location.id &&
+        p.target_date === targetDate &&
+        p.model === model &&
+        isFiniteNumber(p.predicted_pm25),
     );
-    if (!prediction || !isFiniteNumber(prediction.predicted_pm25)) continue;
+    if (candidates.length === 0) continue;
+
+    const prediction = candidates.reduce((best, p) => (p.horizon_days < best.horizon_days ? p : best));
+    const horizon = prediction.horizon_days;
 
     const acc = accuracy.find(
-      (a) => a.location_slug === location.slug && a.model === model && a.horizon_days === 1,
+      (a) => a.location_slug === location.slug && a.model === model && a.horizon_days === horizon,
     );
     const n = acc?.n ?? 0;
 
     out.push({
       model,
       predicted_pm25: round1(prediction.predicted_pm25),
-      horizon_days: 1,
+      horizon_days: (horizon >= 1 && horizon <= 3 ? horizon : 3) as ModelPrediction['horizon_days'],
       mae: acc && n >= MIN_SCORED_DAYS_FOR_RANKING ? acc.mae : null,
       n,
     });
@@ -393,7 +417,12 @@ async function assembleForecasts(locations: readonly LocationRow[]): Promise<Loc
             .select('location_id, target_date, horizon_days, model, predicted_pm25')
             .in('location_id', ids)
             .in('target_date', targetDates)
-            .eq('horizon_days', 1)
+            // Deliberately NOT filtered to horizon 1 — buildModelPredictions
+            // picks the lowest horizon present, so a target date still resolves
+            // from an older, longer-range run when a nightly job is missed.
+            // At most 3 horizons x 3 models x 8 locations, so fetching all of
+            // them costs nothing.
+            .order('horizon_days')
             .returns<PredictionSlim[]>(),
         ),
     todayDates.length === 0

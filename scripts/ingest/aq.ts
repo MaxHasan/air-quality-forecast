@@ -25,6 +25,14 @@
  *   for a skipped or drifted cron, and it costs nothing because every write is
  *   an idempotent upsert on (station_id, observed_at).
  *
+ * AirGradient (Jakarta + Bali — the Nafas network's actual home):
+ *   One keyless call returns every public monitor on Earth; we keep the seeded
+ *   ids. The readings are RAW low-cost-sensor values that overread in humid
+ *   air, so the US-EPA (Barkjohn 2021) humidity correction is applied before
+ *   anything is stored — see scripts/lib/airgradient.ts for the whole story.
+ *   `pm25_ugm3` gets the corrected value; `raw` keeps pm02 + RH + formula id
+ *   so history can be re-derived if the correction is ever revised.
+ *
  * ---------------------------------------------------------------------------
  * Failure policy
  * ---------------------------------------------------------------------------
@@ -43,6 +51,7 @@ import { DEFAULT_AQI_TABLE_ID } from '../../src/lib/aqi';
 import { addLocalDays, todayLocalDate } from '../../src/lib/format';
 import { DORMANT_STATION_DAYS, STALE_FEED_HOURS } from '../../src/lib/stations';
 import type { AqObservationInsert, Json, SgRegionName } from '../../src/lib/types';
+import { AIRGRADIENT_WORLD_URL, parseAirGradientWorld } from '../lib/airgradient';
 import { parseDataGovSgPm25 } from '../lib/datagovsg';
 import { DbFailure, describeDbError, loadStations, serviceClient, upsertChunked, type StationRecord } from '../lib/db';
 import { fetchJson, sleep } from '../lib/http';
@@ -244,6 +253,80 @@ async function ingestDataGovSg(
 }
 
 /* -------------------------------------------------------------------------- */
+/* AirGradient                                                                */
+/* -------------------------------------------------------------------------- */
+
+async function ingestAirGradient(
+  run: RunLog,
+  stations: readonly StationRecord[],
+  now: Date,
+  seen: SeenMap,
+): Promise<AqObservationInsert[]> {
+  const byId = new Map(stations.map((s) => [s.source_station_id, s]));
+
+  const res = await fetchJson<unknown>(AIRGRADIENT_WORLD_URL);
+  if (!res.ok) {
+    // One endpoint serves every AirGradient station, so one failure scope
+    // covers them all — that is accurate, not lazy: there is nothing to retry
+    // per-station.
+    run.failed('airgradient:world', new Error(res.message));
+    return [];
+  }
+
+  const parsed = parseAirGradientWorld(res.data, {
+    now,
+    staleHours: STALE_FEED_HOURS,
+    wanted: new Set(byId.keys()),
+  });
+  if (!parsed.ok) {
+    run.failed('airgradient:world', new Error(`${parsed.reason}: ${parsed.detail}`));
+    return [];
+  }
+
+  const rows: AqObservationInsert[] = [];
+  for (const reading of parsed.readings) {
+    const station = byId.get(reading.locationId);
+    if (!station) continue;
+    rows.push({
+      station_id: station.id,
+      observed_at: reading.observedAt,
+      pm25_ugm3: reading.pm25Corrected,
+      // Corrected concentration, not an index: no inversion happened, so the
+      // AQI columns stay null exactly as they do for data.gov.sg.
+      pm25_aqi_us: null,
+      aqi_table: null,
+      raw: reading.raw,
+    });
+    markSeen(seen, station.id, reading.observedAt);
+    const rawPm = (reading.raw as { pm02_raw?: number }).pm02_raw;
+    console.log(
+      `  ✓ airgradient:${reading.locationId} ${station.name} — raw ${rawPm} → ${reading.pm25Corrected} µg/m³ (EPA-corrected) @ ${reading.observedAt}`,
+    );
+  }
+
+  for (const skip of parsed.skipped) {
+    const station = byId.get(skip.locationId);
+    console.log(`  ~ airgradient:${skip.locationId} ${station?.name ?? ''} ${skip.reason} — ${skip.detail}`);
+  }
+  if (parsed.missing.length > 0) {
+    // A seeded id absent from the world payload is how an AirGradient station
+    // dies: it just stops appearing. The dormancy sweep retires it after
+    // DORMANT_STATION_DAYS; this note is the early warning.
+    console.log(`  ! airgradient ids not in world payload: ${parsed.missing.join(', ')}`);
+  }
+
+  run.note({
+    airgradient_stations: stations.length,
+    airgradient_rows: rows.length,
+    airgradient_skipped: parsed.skipped.length,
+    ...(parsed.skipped.length ? { airgradient_skip_detail: parsed.skipped.map((s) => `${s.locationId}:${s.reason}`) } : {}),
+    ...(parsed.missing.length ? { airgradient_missing: parsed.missing } : {}),
+  });
+
+  return rows;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Station bookkeeping                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -348,6 +431,7 @@ async function main(): Promise<void> {
 
     const waqiStations = stations.filter((s) => s.source === 'waqi');
     const sgStations = stations.filter((s) => s.source === 'datagovsg');
+    const agStations = stations.filter((s) => s.source === 'airgradient');
     const seen: SeenMap = new Map();
 
     /* -- fetch ------------------------------------------------------------- */
@@ -357,7 +441,10 @@ async function main(): Promise<void> {
     console.log(`data.gov.sg — ${sgStations.length} region(s)`);
     const sgRows = sgStations.length > 0 ? await ingestDataGovSg(run, sgStations, now, seen) : [];
 
-    const rows = [...waqiRows, ...sgRows];
+    console.log(`AirGradient — ${agStations.length} station(s)`);
+    const agRows = agStations.length > 0 ? await ingestAirGradient(run, agStations, now, seen) : [];
+
+    const rows = [...waqiRows, ...sgRows, ...agRows];
 
     /* -- persist ----------------------------------------------------------- */
     if (dryRun) {

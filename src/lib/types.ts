@@ -50,8 +50,15 @@ export type LocationSlug =
   | 'sg-east'
   | 'sg-west';
 
-/** Where a PM2.5 feed comes from. */
-export type AqSource = 'waqi' | 'datagovsg';
+/**
+ * Where a PM2.5 feed comes from.
+ *
+ * `airgradient` readings are low-cost optical sensors served raw by the API;
+ * the connector applies the US-EPA (Barkjohn 2021) humidity correction before
+ * `pm25_ugm3` is written, and keeps the raw value + RH in `raw`. See
+ * scripts/lib/airgradient.ts.
+ */
+export type AqSource = 'waqi' | 'datagovsg' | 'airgradient';
 
 /** Upstream sensor network behind a WAQI feed (`null` when unconfirmed). */
 export type StationNetwork = 'nafas' | 'bmkg' | 'klhk' | 'nea';

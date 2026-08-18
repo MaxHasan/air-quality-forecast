@@ -23,7 +23,7 @@
  */
 
 import type { IsoTimestamp, SgRegionName } from '../../src/lib/types';
-import { floorToHourUtc } from './waqi';
+import { floorToHourUtc } from './time';
 
 /** The five regions, in the order the seed lists them. */
 export const SG_REGIONS: readonly SgRegionName[] = ['central', 'north', 'south', 'east', 'west'] as const;

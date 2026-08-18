@@ -64,6 +64,44 @@ describe('aggregateDailyAq — averaging across stations', () => {
     expect(agg.station_count).toBe(2);
   });
 
+  it('averages a station’s several samples within one hour before comparing stations', () => {
+    // The mixed-cadence case this app actually has: AirGradient is polled four
+    // times an hour and contributes four instants; a WAQI station publishes one
+    // hourly average. Station 1 is the frequent sampler at 40/44/48/52 (mean
+    // 46); station 2 is the reference at 30. The hour is (46 + 30) / 2 = 38.
+    //
+    // A flat mean over the five rows gives 42.8 — the frequent sampler winning
+    // four votes to one, letting a low-cost optical sensor outvote a reference
+    // monitor purely by talking more often.
+    const rows = [
+      aq('2026-08-16T01:00:00Z', 40, 1),
+      aq('2026-08-16T01:15:00Z', 44, 1),
+      aq('2026-08-16T01:30:00Z', 48, 1),
+      aq('2026-08-16T01:45:00Z', 52, 1),
+      aq('2026-08-16T01:00:00Z', 30, 2),
+    ];
+    const agg = aggregateDailyAq(rows)!;
+    expect(agg.pm25_avg).toBe(38);
+    expect(agg.pm25_avg).not.toBeCloseTo(214 / 5, 5);
+    // Sub-hourly samples are still one hour, not four.
+    expect(agg.hours_count).toBe(1);
+    expect(agg.station_count).toBe(2);
+  });
+
+  it('treats repeated samples in an hour as one hour for min/max too', () => {
+    // pm25_min/max are documented as the extremes of the hourly means, so a
+    // single spiky instant must not become the day's maximum on its own.
+    const rows = [
+      aq('2026-08-16T01:00:00Z', 10, 1),
+      aq('2026-08-16T01:20:00Z', 90, 1), // brief spike within the same hour
+      aq('2026-08-16T02:00:00Z', 20, 1),
+    ];
+    const agg = aggregateDailyAq(rows)!;
+    expect(agg.pm25_max).toBe(50); // the 01:00 hour's mean, not the 90 instant
+    expect(agg.pm25_min).toBe(20);
+    expect(agg.hours_count).toBe(2);
+  });
+
   it('does not let a more prolific station dominate the day', () => {
     // Station 1 reports both hours at 100, station 2 only the first hour at 0.
     // Hourly means: 50 and 100 -> 75.

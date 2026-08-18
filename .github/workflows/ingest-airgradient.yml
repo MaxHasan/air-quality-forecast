@@ -1,0 +1,65 @@
+# ============================================================================
+# ingest-airgradient — sample the optical sensors four times an hour.
+#
+# WHY THIS EXISTS SEPARATELY FROM ingest-aq
+# The three sources report fundamentally different things. WAQI and data.gov.sg
+# publish an hourly *average*: polling them more often returns the same number
+# again, so hourly is exactly right and anything faster is waste (and, for
+# WAQI's free token, waste of someone else's goodwill).
+#
+# AirGradient publishes an *instantaneous* reading, updated every couple of
+# minutes. Polling that once an hour and filing it as the hour was the flaw this
+# workflow fixes: a single moment was standing in for sixty of them, and then
+# being averaged against genuine hourly means as though the two were the same
+# kind of number.
+#
+# Four samples an hour, averaged within the station-hour by aggregateDailyAq,
+# make a defensible hourly estimate instead. Losing a run to GitHub's scheduler
+# — which happens routinely — still leaves three.
+#
+# Cost is negligible: one keyless HTTP call per run, no WAQI token spent, and
+# Actions minutes are unmetered on a public repository.
+#
+# The :07/:22/:37/:52 offsets keep this off both the top of the hour (where
+# GitHub's queue is busiest) and off ingest-aq's :17 slot, so the two jobs do
+# not contend for the same runner window or race on the same rows.
+# ============================================================================
+name: ingest-airgradient
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+# Never overlap: two runs writing the same station-hour is harmless thanks to
+# the upsert key, but it doubles the writes and muddies the run log.
+concurrency:
+  group: ingest-airgradient
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # No WAQI_TOKEN: --only=airgradient never touches WAQI, and a job should
+      # not be handed a credential it has no use for.
+      - name: Sample AirGradient
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run ingest:aq -- --only=airgradient
+
+      # Deliberately no rollup step. ingest-aq rolls up hourly, which is often
+      # enough for a daily mean, and running it four times an hour would recompute
+      # the same three days for no gain.

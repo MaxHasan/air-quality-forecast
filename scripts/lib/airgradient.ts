@@ -42,9 +42,12 @@
  * permanent phantom step into every daily average that crosses it.
  *
  * The correction narrows the gap; it does not close it. `pm25_ugm3` gets the
- * corrected value, and `raw` keeps {pm02, rhum, formula id} so history can be
- * re-derived if the formula is ever revised. `npm run verify:colocation`
- * measures the residual against the Kemayoran BAM on demand.
+ * corrected value, and `raw` retains {pm02, rhum, formula id} — the inputs a
+ * re-derivation would need if the formula is ever revised. Note that no such
+ * re-derivation script exists yet: the inputs are preserved so one *can* be
+ * written, not because one is waiting. Until it is, a formula change leaves
+ * stored history on the old basis. `npm run verify:colocation` measures the
+ * residual against the Kemayoran BAM on demand.
  *
  * A reading without RH is dropped rather than half-corrected: applying the
  * slope without the RH term biases high by construction, and a silently
@@ -66,17 +69,46 @@ export const CORRECTION_ID = 'epa-barkjohn-2021';
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Is this relative humidity a real measurement, or a dead sensor?
+ *
+ * Outdoor RH is never exactly 0 anywhere on Earth, and `0` is the value a
+ * failed humidity channel reports — three stations in the live world payload
+ * were sitting at `rhum: 0` when this was written. Anything at or below 0, or
+ * above 100, is therefore a sentinel rather than weather.
+ *
+ * This matters more than it looks. The correction subtracts 0.0862·RH, so a
+ * sentinel that got clamped to 0 instead of rejected would silently inflate
+ * the result by ~6.5 µg/m³ at Jakarta's typical 75% RH — a confidently wrong
+ * number, which is precisely what this module refuses to store.
+ */
+export function isPlausibleRh(rh: number): boolean {
+  return Number.isFinite(rh) && rh > 0 && rh <= 100;
+}
+
+/**
+ * Upper bound on a believable raw optical reading, µg/m³.
+ *
+ * Generous on purpose: Indonesian peat-fire haze genuinely drives these
+ * sensors into the high hundreds, and the high-range polynomial is defined for
+ * arbitrarily large inputs. The bound exists only to catch a garbage payload,
+ * so it sits far above any real air rather than at the edge of plausible air —
+ * clipping a real extreme would blind the app exactly when it matters most.
+ */
+const MAX_PLAUSIBLE_RAW_PM25 = 10_000;
+
+/**
  * US-EPA (Barkjohn 2021) humidity correction, AirGradient's published piecewise
  * form. Returns µg/m³ rounded to one decimal, clamped at 0; `null` when the
  * inputs cannot support a correction (missing/absurd raw or RH).
+ *
+ * RH is validated, never clamped — see `isPlausibleRh`.
  */
 export function correctAirGradientPm25(raw: number, rh: number): number | null {
-  if (!Number.isFinite(raw) || raw < 0 || raw > 2000) return null;
-  if (!Number.isFinite(rh)) return null;
-  const rhClamped = Math.min(100, Math.max(0, rh));
+  if (!Number.isFinite(raw) || raw < 0 || raw > MAX_PLAUSIBLE_RAW_PM25) return null;
+  if (!isPlausibleRh(rh)) return null;
 
-  const low = 0.524 * raw - 0.0862 * rhClamped + 5.75;
-  const mid = 0.786 * raw - 0.0862 * rhClamped + 5.75;
+  const low = 0.524 * raw - 0.0862 * rh + 5.75;
+  const mid = 0.786 * raw - 0.0862 * rh + 5.75;
   const high = 2.966 + 0.69 * raw + 8.84e-4 * raw * raw;
 
   let corrected: number;
@@ -84,7 +116,7 @@ export function correctAirGradientPm25(raw: number, rh: number): number | null {
     corrected = low;
   } else if (raw < 50) {
     const w = raw / 20 - 1.5; // 0 at raw=30 → 1 at raw=50
-    corrected = (0.786 * w + 0.524 * (1 - w)) * raw - 0.0862 * rhClamped + 5.75;
+    corrected = (0.786 * w + 0.524 * (1 - w)) * raw - 0.0862 * rh + 5.75;
   } else if (raw < 210) {
     corrected = mid;
   } else if (raw < 260) {
@@ -172,8 +204,13 @@ export function parseAirGradientWorld(payload: unknown, options: AirGradientPars
     if (!id || !options.wanted.has(id)) continue;
     found.add(id);
 
-    if (item.offline === true) {
-      skipped.push({ locationId: id, reason: 'offline', detail: 'flagged offline by the map' });
+    // Truthy rather than `=== true`: every other field in this parser is read
+    // through a typeof guard precisely because this endpoint feeds a map rather
+    // than being a versioned API. If the flag is ever serialised as "true" or 1,
+    // a strict check would mark dead stations live and store their last stale
+    // reading as current — the one outcome the staleness budget exists to stop.
+    if (item.offline === true || item.offline === 'true' || item.offline === 1) {
+      skipped.push({ locationId: id, reason: 'offline', detail: `flagged offline by the map (${String(item.offline)})` });
       continue;
     }
 
@@ -183,10 +220,14 @@ export function parseAirGradientWorld(payload: unknown, options: AirGradientPars
       continue;
     }
 
-    const rh = typeof item.rhum === 'number' ? item.rhum : null;
+    // Absent *and* implausible RH take the same path: both mean "no usable
+    // humidity", and a dead sensor reporting 0 is indistinguishable from a
+    // missing field for our purposes. Dropping beats half-correcting, which
+    // would bias high by construction — see the file header.
+    const rh = typeof item.rhum === 'number' && isPlausibleRh(item.rhum) ? item.rhum : null;
     if (rh === null) {
-      // Deliberate drop — see the file header. Half-correcting biases high.
-      skipped.push({ locationId: id, reason: 'no-rh', detail: `pm02=${rawPm} but no rhum; cannot correct` });
+      const seen = typeof item.rhum === 'number' ? `rhum=${item.rhum}` : 'no rhum';
+      skipped.push({ locationId: id, reason: 'no-rh', detail: `pm02=${rawPm} but ${seen}; cannot correct` });
       continue;
     }
 

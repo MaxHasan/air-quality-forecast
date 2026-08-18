@@ -91,11 +91,12 @@ describe('threshold config', () => {
 });
 
 /**
- * stations.ts is a hand-maintained mirror of the seed migration. These tests are
- * the thing that stops the two drifting apart silently — a mismatch would mean
- * the weather pull and the PM2.5 rollup were keyed to different places.
+ * stations.ts is a hand-maintained mirror of the seed migrations (0004 + 0006).
+ * These tests are the thing that stops the two drifting apart silently — a
+ * mismatch would mean the weather pull and the PM2.5 rollup were keyed to
+ * different places.
  */
-describe('stations.ts agrees with 0004_seed.sql', () => {
+describe('stations.ts agrees with the seed migrations', () => {
   // Stations are seeded across two migrations: 0004 (waqi + datagovsg) and
   // 0006 (airgradient). The mirror must agree with their union.
   const seed =

@@ -1,11 +1,11 @@
 /**
- * ingest/aq.ts — hourly PM2.5 ground truth, from two very different feeds.
+ * ingest/aq.ts — hourly PM2.5 ground truth, from three very different feeds.
  *
  * Run:
  *   npm run ingest:aq                 # normal: fetch, upsert, log the run
  *   npm run ingest:aq -- --dry-run    # fetch and parse only; touches no database
  *
- * Scheduled every two hours at :17 (see .github/workflows/ingest-aq.yml). The
+ * Scheduled hourly at :17 (see .github/workflows/ingest-aq.yml). The
  * odd minute is deliberate — GitHub's cron queue is busiest on the hour, and a
  * job that is drift-tolerant should not also be queue-contended.
  *
@@ -30,13 +30,15 @@
  *   ids. The readings are RAW low-cost-sensor values that overread in humid
  *   air, so the US-EPA (Barkjohn 2021) humidity correction is applied before
  *   anything is stored — see scripts/lib/airgradient.ts for the whole story.
- *   `pm25_ugm3` gets the corrected value; `raw` keeps pm02 + RH + formula id
- *   so history can be re-derived if the correction is ever revised.
+ *   `pm25_ugm3` gets the corrected value; `raw` retains pm02 + RH + formula id,
+ *   which are the inputs a re-derivation would need if the correction is ever
+ *   revised. No re-derivation script exists yet — the inputs are kept so one
+ *   can be written.
  *
  * ---------------------------------------------------------------------------
  * Failure policy
  * ---------------------------------------------------------------------------
- * One dead station must never stop the other seven. Each feed is fetched and
+ * One dead station must never stop the rest. Each feed is fetched and
  * parsed inside its own try, failures are recorded against the station's scope
  * and the run closes `partial`. Only a failure that is not scoped to a station
  * — no credentials, no schema, no stations at all — ends the run.

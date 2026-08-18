@@ -26,22 +26,42 @@
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- Widen the source check. 0001 declared it inline on the column, so Postgres
--- auto-named it `stations_source_check` — but a DO block that finds the actual
--- constraint is safer than trusting an auto-generated name, because a silent
--- no-op drop would leave the old two-value check in place and every
--- 'airgradient' insert failing.
+-- Widen the source check.
+--
+-- 0001 declared the check inline on the column, which means Postgres both
+-- auto-named it (`stations_source_check`) and NORMALISED its text: what was
+-- written as
+--     check (source in ('waqi', 'datagovsg'))
+-- is stored as
+--     CHECK ((source = ANY (ARRAY['waqi'::text, 'datagovsg'::text])))
+--
+-- That normalisation broke the first version of this migration. It hunted for
+-- the constraint with `pg_get_constraintdef(oid) ilike '%source%in%'` -- a
+-- pattern matching the SQL as authored, not as stored. There is no "in" in the
+-- ANY/ARRAY form, so it matched nothing, dropped nothing, and the ADD below
+-- then collided with the surviving name:
+--     ERROR 42710: constraint "stations_source_check" for relation "stations"
+--     already exists
+--
+-- So: match the catalogue structurally instead of by text. `conkey` holds the
+-- columns a constraint covers, so joining through pg_attribute finds every
+-- CHECK on `source` whatever it is called and however Postgres chose to render
+-- it. That is also what makes this migration re-runnable: on a second pass it
+-- drops the three-value constraint and adds it straight back.
 -- ---------------------------------------------------------------------------
 do $$
 declare
   con record;
 begin
   for con in
-    select conname
-    from pg_constraint
-    where conrelid = 'public.stations'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) ilike '%source%in%'
+    select c.conname
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid
+     and a.attnum = any (c.conkey)
+    where c.conrelid = 'public.stations'::regclass
+      and c.contype = 'c'
+      and a.attname = 'source'
   loop
     execute format('alter table public.stations drop constraint %I', con.conname);
   end loop;
@@ -157,31 +177,43 @@ where l.id = mc.location_id
 -- ---------------------------------------------------------------------------
 -- Admit the sub-hourly AirGradient poll as its own job name.
 --
--- `ingestion_runs.job` carries a CHECK, so a new job name is a schema change,
--- not just a TypeScript union member -- without this, every run of the
--- ingest-airgradient workflow would fail to open its run row.
+-- `ingestion_runs.job` carries a CHECK, so a new job name is a schema change
+-- and not merely a TypeScript union member. Without this, every run of the
+-- ingest-airgradient workflow fails to open its run row (run-log.ts degrades to
+-- "detached" and still ingests, so the symptom is missing audit rows and a
+-- footer that never sees the job -- not lost data).
 --
--- Why it needs a distinct name rather than reusing 'ingest-aq': the PWA footer
--- scopes its failure streak to the most recent job's own history, expressly so
--- a healthy job cannot mask a failing one. That job polls four times an hour,
--- so it is nearly always the most recent run; sharing the name would let its
--- successes reset the streak and hide a WAQI outage behind a green footer.
+-- Why a distinct name rather than reusing 'ingest-aq': the PWA footer scopes its
+-- failure streak to the most recent job's own history, expressly so a healthy
+-- job cannot mask a failing one. The AirGradient poll runs four times an hour
+-- and is therefore nearly always the most recent run; sharing the name would let
+-- its successes reset the streak and hide a WAQI outage behind a green footer.
 --
--- Same DO-block approach as the stations constraint above: find the check by
--- its definition rather than trusting the auto-generated name, because a silent
--- no-op drop would leave the old list in place and the failure would surface as
--- an unloggable job rather than as a migration error.
+-- Matched structurally through pg_attribute, exactly as the stations constraint
+-- above -- and for the same reason, which nearly bit twice. 0001 wrote
+--     check (job in ('ingest-aq', ...))
+-- and Postgres stored it as
+--     CHECK ((job = ANY (ARRAY['ingest-aq'::text, ...])))
+-- An earlier draft of this block hunted for `%job%in%`. That pattern happens to
+-- match the stored text, but only by accident: the "in" it finds is the one
+-- inside the literal 'ingest-aq'. Rename the jobs and the match evaporates, the
+-- drop silently does nothing, and the ADD below collides with the surviving
+-- name. Matching on conkey/attname depends on the catalogue instead of on
+-- coincidences of spelling.
 -- ---------------------------------------------------------------------------
 do $$
 declare
   con record;
 begin
   for con in
-    select conname
-    from pg_constraint
-    where conrelid = 'public.ingestion_runs'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) ilike '%job%in%'
+    select c.conname
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid
+     and a.attnum = any (c.conkey)
+    where c.conrelid = 'public.ingestion_runs'::regclass
+      and c.contype = 'c'
+      and a.attname = 'job'
   loop
     execute format('alter table public.ingestion_runs drop constraint %I', con.conname);
   end loop;

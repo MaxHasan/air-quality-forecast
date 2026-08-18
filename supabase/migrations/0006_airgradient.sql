@@ -26,22 +26,42 @@
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- Widen the source check. 0001 declared it inline on the column, so Postgres
--- auto-named it `stations_source_check` — but a DO block that finds the actual
--- constraint is safer than trusting an auto-generated name, because a silent
--- no-op drop would leave the old two-value check in place and every
--- 'airgradient' insert failing.
+-- Widen the source check.
+--
+-- 0001 declared the check inline on the column, which means Postgres both
+-- auto-named it (`stations_source_check`) and NORMALISED its text: what was
+-- written as
+--     check (source in ('waqi', 'datagovsg'))
+-- is stored as
+--     CHECK ((source = ANY (ARRAY['waqi'::text, 'datagovsg'::text])))
+--
+-- That normalisation broke the first version of this migration. It hunted for
+-- the constraint with `pg_get_constraintdef(oid) ilike '%source%in%'` -- a
+-- pattern matching the SQL as authored, not as stored. There is no "in" in the
+-- ANY/ARRAY form, so it matched nothing, dropped nothing, and the ADD below
+-- then collided with the surviving name:
+--     ERROR 42710: constraint "stations_source_check" for relation "stations"
+--     already exists
+--
+-- So: match the catalogue structurally instead of by text. `conkey` holds the
+-- columns a constraint covers, so joining through pg_attribute finds every
+-- CHECK on `source` whatever it is called and however Postgres chose to render
+-- it. That is also what makes this migration re-runnable: on a second pass it
+-- drops the three-value constraint and adds it straight back.
 -- ---------------------------------------------------------------------------
 do $$
 declare
   con record;
 begin
   for con in
-    select conname
-    from pg_constraint
-    where conrelid = 'public.stations'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) ilike '%source%in%'
+    select c.conname
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid
+     and a.attnum = any (c.conkey)
+    where c.conrelid = 'public.stations'::regclass
+      and c.contype = 'c'
+      and a.attname = 'source'
   loop
     execute format('alter table public.stations drop constraint %I', con.conname);
   end loop;

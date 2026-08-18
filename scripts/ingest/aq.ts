@@ -4,6 +4,7 @@
  * Run:
  *   npm run ingest:aq                 # normal: fetch, upsert, log the run
  *   npm run ingest:aq -- --dry-run    # fetch and parse only; touches no database
+ *   npm run ingest:aq -- --only=airgradient   # one source (see ingest-airgradient.yml)
  *
  * Scheduled hourly at :17 (see .github/workflows/ingest-aq.yml). The
  * odd minute is deliberate — GitHub's cron queue is busiest on the hour, and a
@@ -57,7 +58,7 @@ import { AIRGRADIENT_WORLD_URL, parseAirGradientWorld } from '../lib/airgradient
 import { parseDataGovSgPm25 } from '../lib/datagovsg';
 import { DbFailure, describeDbError, loadStations, serviceClient, upsertChunked, type StationRecord } from '../lib/db';
 import { fetchJson, sleep } from '../lib/http';
-import { hasFlag, reportFatal, runJob, type RunLog } from '../lib/run-log';
+import { hasFlag, reportFatal, runJob, stringFlag, type RunLog } from '../lib/run-log';
 import { parseWaqiFeed } from '../lib/waqi';
 
 /** Politeness delay between WAQI calls. The token is free; the goodwill is not. */
@@ -397,11 +398,15 @@ async function updateStationFreshness(
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const dryRun = hasFlag(argv, 'dry-run');
+  // `--only=airgradient` lets the sub-hourly workflow poll just that source
+  // without re-fetching WAQI and data.gov.sg twelve extra times a day (and
+  // without spending WAQI goodwill on data that only changes hourly).
+  const only = stringFlag(argv, 'only', null);
   const now = new Date();
 
   await runJob('ingest-aq', { dryRun, meta: { stale_feed_hours: STALE_FEED_HOURS, aqi_table: DEFAULT_AQI_TABLE_ID } }, async (run) => {
     const token = process.env.WAQI_TOKEN?.trim();
-    if (!token) {
+    if (!token && only !== 'airgradient' && only !== 'datagovsg') {
       throw new DbFailure(
         'Missing WAQI_TOKEN.\n' +
           '  Locally:  add it to .env.local (see .env.example).\n' +
@@ -431,20 +436,35 @@ async function main(): Promise<void> {
       stations = await loadStations(serviceClient(), true);
     }
 
-    const waqiStations = stations.filter((s) => s.source === 'waqi');
-    const sgStations = stations.filter((s) => s.source === 'datagovsg');
-    const agStations = stations.filter((s) => s.source === 'airgradient');
+    const wants = (source: string): boolean => only === null || only === source;
+    if (only !== null && !['waqi', 'datagovsg', 'airgradient'].includes(only)) {
+      throw new DbFailure(`--only=${only} is not a known source (waqi | datagovsg | airgradient)`);
+    }
+
+    const waqiStations = wants('waqi') ? stations.filter((s) => s.source === 'waqi') : [];
+    const sgStations = wants('datagovsg') ? stations.filter((s) => s.source === 'datagovsg') : [];
+    const agStations = wants('airgradient') ? stations.filter((s) => s.source === 'airgradient') : [];
     const seen: SeenMap = new Map();
+    if (only) console.log(`[ingest-aq] --only=${only}`);
 
     /* -- fetch ------------------------------------------------------------- */
-    console.log(`WAQI — ${waqiStations.length} station(s)`);
-    const waqiRows = await ingestWaqi(run, waqiStations, token, now, seen);
+    let waqiRows: AqObservationInsert[] = [];
+    if (waqiStations.length > 0) {
+      console.log(`WAQI — ${waqiStations.length} station(s)`);
+      waqiRows = await ingestWaqi(run, waqiStations, token as string, now, seen);
+    }
 
-    console.log(`data.gov.sg — ${sgStations.length} region(s)`);
-    const sgRows = sgStations.length > 0 ? await ingestDataGovSg(run, sgStations, now, seen) : [];
+    let sgRows: AqObservationInsert[] = [];
+    if (sgStations.length > 0) {
+      console.log(`data.gov.sg — ${sgStations.length} region(s)`);
+      sgRows = await ingestDataGovSg(run, sgStations, now, seen);
+    }
 
-    console.log(`AirGradient — ${agStations.length} station(s)`);
-    const agRows = agStations.length > 0 ? await ingestAirGradient(run, agStations, now, seen) : [];
+    let agRows: AqObservationInsert[] = [];
+    if (agStations.length > 0) {
+      console.log(`AirGradient — ${agStations.length} station(s)`);
+      agRows = await ingestAirGradient(run, agStations, now, seen);
+    }
 
     const rows = [...waqiRows, ...sgRows, ...agRows];
 
@@ -463,7 +483,12 @@ async function main(): Promise<void> {
     if (rows.length > 0) {
       run.upserted(await upsertChunked('upserting aq_observations', db, 'aq_observations', rows, 'station_id,observed_at'));
     }
-    await updateStationFreshness(run, db, stations, seen, now);
+    // Only sweep the sources this run actually polled: an --only=airgradient run
+    // has no evidence about WAQI's stations, and judging them on evidence it
+    // never gathered would retire live feeds for not answering a question
+    // nobody asked them.
+    const polled = stations.filter((s) => wants(s.source));
+    await updateStationFreshness(run, db, polled, seen, now);
   });
 }
 

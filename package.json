@@ -19,6 +19,7 @@
     "discover:stations": "tsx --env-file-if-exists=.env.local scripts/discover-stations.ts",
     "verify:aqi-table": "tsx --env-file-if-exists=.env.local scripts/verify-aqi-table.ts",
     "verify:colocation": "tsx --env-file-if-exists=.env.local scripts/verify-colocation.ts",
+    "rederive:airgradient": "tsx --env-file-if-exists=.env.local scripts/rederive-airgradient.ts",
     "calibrate": "tsx --env-file-if-exists=.env.local scripts/calibrate/fit-wind-model.ts"
   },
   "dependencies": {

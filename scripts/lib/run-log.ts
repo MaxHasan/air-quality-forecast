@@ -293,6 +293,28 @@ export function hasFlag(argv: readonly string[], flag: string): boolean {
  * unparseable* one: `--days banana` silently becoming `--days 3` is how a
  * backfill quietly does nothing.
  */
+/**
+ * Read `--name=value` (or `--name value`) as a string, or `fallback`.
+ *
+ * Returns the fallback for a present-but-empty flag, so `--only=` behaves like
+ * "not specified" rather than selecting a source called "".
+ */
+export function stringFlag(argv: readonly string[], flag: string, fallback: string | null): string | null {
+  const prefixed = `--${flag}=`;
+  for (const [i, arg] of argv.entries()) {
+    if (arg.startsWith(prefixed)) {
+      const value = arg.slice(prefixed.length).trim();
+      return value === '' ? fallback : value;
+    }
+    if (arg === `--${flag}`) {
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) return next.trim() || fallback;
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
 export function intFlag(argv: readonly string[], flag: string, fallback: number): number {
   const idx = argv.findIndex((a) => a === `--${flag}` || a.startsWith(`--${flag}=`));
   if (idx === -1) return fallback;

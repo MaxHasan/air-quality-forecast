@@ -109,8 +109,9 @@ export function groupByLocalDate<T extends { observed_at: IsoTimestamp }>(
  * asserting "the average was 0" would be a lie that scores predictions.
  */
 export function aggregateDailyAq(rows: readonly HourlyAq[]): DailyAqAggregate | null {
-  // absolute hour index -> the values every station reported in that hour
-  const byHour = new Map<string, number[]>();
+  // absolute hour index -> station id -> every sample that station reported in
+  // that hour. The inner map is the load-bearing part: see the note below.
+  const byHour = new Map<string, Map<number, number[]>>();
   const stations = new Set<number>();
 
   for (const row of rows) {
@@ -122,15 +123,38 @@ export function aggregateDailyAq(rows: readonly HourlyAq[]): DailyAqAggregate | 
     // covered zone is a whole number of hours from UTC, the local hour and the
     // UTC hour partition the day identically.
     const hourKey = String(Math.floor(t / 3_600_000));
-    const bucket = byHour.get(hourKey);
-    if (bucket) bucket.push(row.pm25_ugm3);
-    else byHour.set(hourKey, [row.pm25_ugm3]);
+    let hourBucket = byHour.get(hourKey);
+    if (!hourBucket) {
+      hourBucket = new Map<number, number[]>();
+      byHour.set(hourKey, hourBucket);
+    }
+    const stationBucket = hourBucket.get(row.station_id);
+    if (stationBucket) stationBucket.push(row.pm25_ugm3);
+    else hourBucket.set(row.station_id, [row.pm25_ugm3]);
     stations.add(row.station_id);
   }
 
   if (byHour.size === 0) return null;
 
-  const hourlyMeans = [...byHour.values()].map(mean);
+  // Mean within (station, hour) FIRST, then across stations, then across hours.
+  //
+  // The nesting matters as soon as sources disagree about what a row means.
+  // WAQI and data.gov.sg publish an hourly *average* and contribute exactly one
+  // row per station-hour. AirGradient publishes an instantaneous sample and is
+  // polled several times an hour, so it contributes several. A flat mean over
+  // every row in the hour would weight each *row* equally and hand the
+  // frequently-sampled station four votes to the reference monitor's one —
+  // letting a $100 optical sensor outvote a beta-attenuation monitor purely by
+  // talking more often.
+  //
+  // Averaging within the station first also does something better than restore
+  // fairness: it turns AirGradient's scattered instants into a genuine hourly
+  // mean for that station, which is the quantity the other sources were already
+  // reporting. That is what makes the three commensurable rather than merely
+  // equally weighted.
+  const hourlyMeans = [...byHour.values()].map((perStation) =>
+    mean([...perStation.values()].map(mean)),
+  );
 
   return {
     pm25_avg: mean(hourlyMeans),

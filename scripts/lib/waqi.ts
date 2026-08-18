@@ -38,6 +38,12 @@
 
 import { aqiToPm25, DEFAULT_AQI_TABLE_ID, DEFAULT_PM25_BREAKPOINTS, type AqiBreakpointTable } from '../../src/lib/aqi';
 import type { AqiTableId, IsoTimestamp, Json } from '../../src/lib/types';
+import { floorToHourUtc } from './time';
+
+// Re-exported because this module used to own it and tests/waqi.test.ts still
+// exercises it here; the implementation now lives in ./time, so the AirGradient
+// and data.gov.sg parsers no longer import a date helper from the WAQI module.
+export { floorToHourUtc };
 
 /** Why a feed produced no observation. */
 export type WaqiRejectReason =
@@ -112,21 +118,6 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
  * The whole point is to *reject* offset-less strings — see note 3 above.
  */
 const ZONED_ISO = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
-
-/**
- * Floor an instant to the top of its UTC hour.
- *
- * `aq_observations` is keyed on `(station_id, observed_at)` and the daily
- * rollup counts *distinct local hours*, so one row per station-hour is the
- * intended grain. WAQI reports exact hours today; flooring makes that a
- * property of our storage rather than a hope about theirs, and keeps re-runs
- * idempotent if it ever starts publishing at :30.
- */
-export function floorToHourUtc(d: Date): Date {
-  const out = new Date(d.getTime());
-  out.setUTCMinutes(0, 0, 0);
-  return out;
-}
 
 /**
  * Parse one `/feed/@{uid}/` response.

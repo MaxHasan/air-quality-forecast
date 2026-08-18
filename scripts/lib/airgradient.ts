@@ -56,7 +56,6 @@
  */
 
 import type { Json } from '../../src/lib/types';
-import { floorToHourUtc } from './waqi';
 
 export const AIRGRADIENT_WORLD_URL =
   'https://api.airgradient.com/public/api/v1/world/locations/measures/current';
@@ -252,10 +251,19 @@ export function parseAirGradientWorld(payload: unknown, options: AirGradientPars
     readings.push({
       locationId: id,
       pm25Corrected: corrected,
-      // Floored to the hour for idempotency: two runs in the same hour revise
-      // one row instead of stacking near-duplicate minutes. The exact
-      // measurement instant is preserved in `raw`.
-      observedAt: floorToHourUtc(measuredAt).toISOString(),
+      // The TRUE measurement instant, not floored to the hour.
+      //
+      // This reading is an instantaneous sample, not an hourly average, and
+      // flooring it would assert the opposite — filing one moment under a whole
+      // clock hour as though it described all sixty minutes. Keeping the
+      // instant lets several samples per hour coexist under the
+      // `(station_id, observed_at)` key, and `aggregateDailyAq` averages them
+      // within the station-hour into a real hourly mean.
+      //
+      // Idempotency survives: the sensor's own timestamp is the key, so
+      // re-fetching the same reading rewrites the same row rather than stacking
+      // a duplicate.
+      observedAt: measuredAt.toISOString(),
       raw: {
         source: 'airgradient',
         location_id: id,

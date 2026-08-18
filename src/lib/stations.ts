@@ -217,7 +217,36 @@ export const DATAGOVSG_STATIONS: readonly StationConfig[] = [
   { locationSlug: 'sg-west', source: 'datagovsg', sourceStationId: 'west', name: 'NEA West region', network: 'nea' },
 ] as const;
 
-export const ALL_STATIONS: readonly StationConfig[] = [...WAQI_STATIONS, ...DATAGOVSG_STATIONS] as const;
+/**
+ * AirGradient public-map stations, resolved live on 2026-08-18 — where the
+ * Nafas network actually publishes (`publicContributorName: "Nafas"`), after
+ * WAQI turned out to carry no Nafas feeds at all. Data is CC-BY-SA 4.0.
+ *
+ * `sourceStationId` is the map's numeric `locationId`. Readings arrive as RAW
+ * optical-sensor values and are EPA-humidity-corrected by the connector before
+ * storage — see scripts/lib/airgradient.ts for the correction and its caveats.
+ *
+ * 199980 sits at BMKG headquarters beside the Kemayoran reference BAM
+ * (waqi 8294): the standing co-location pair for `npm run verify:colocation`.
+ * Bali goes from one station (WAQI Sempidi) to four here, which is the end of
+ * its single point of failure.
+ */
+export const AIRGRADIENT_STATIONS: readonly StationConfig[] = [
+  { locationSlug: 'jakarta-central', source: 'airgradient', sourceStationId: '84702', name: 'The Pakubuwono Menteng', network: null },
+  { locationSlug: 'jakarta-central', source: 'airgradient', sourceStationId: '199980', name: 'BMKG 1 (co-located with Kemayoran BAM)', network: null },
+  { locationSlug: 'bsd', source: 'airgradient', sourceStationId: '156518', name: 'British School Jakarta, Pondok Aren', network: 'nafas' },
+  { locationSlug: 'bsd', source: 'airgradient', sourceStationId: '156523', name: 'Global Jaya School, Parigi', network: 'nafas' },
+  { locationSlug: 'bsd', source: 'airgradient', sourceStationId: '74891', name: 'Ciputat', network: 'nafas' },
+  { locationSlug: 'bali-denpasar', source: 'airgradient', sourceStationId: '77247', name: 'Tonja, Denpasar', network: 'nafas' },
+  { locationSlug: 'bali-denpasar', source: 'airgradient', sourceStationId: '203332', name: 'Sibang Eco Village', network: null },
+  { locationSlug: 'bali-denpasar', source: 'airgradient', sourceStationId: '203333', name: 'Canggu, Padang Linjong', network: null },
+] as const;
+
+export const ALL_STATIONS: readonly StationConfig[] = [
+  ...WAQI_STATIONS,
+  ...DATAGOVSG_STATIONS,
+  ...AIRGRADIENT_STATIONS,
+] as const;
 
 /* -------------------------------------------------------------------------- */
 /* Ingestion tuning                                                           */

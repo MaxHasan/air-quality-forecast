@@ -103,6 +103,34 @@ export default function AboutPage() {
           </li>
           <li>
             <strong className="text-foreground">
+              <a
+                href="https://www.airgradient.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-accent"
+              >
+                AirGradient
+              </a>
+            </strong>{' '}
+            hosts the public sensor map where the{' '}
+            <a href="https://nafas.co.id" target="_blank" rel="noopener noreferrer" className="underline hover:text-accent">
+              Nafas
+            </a>{' '}
+            network and other community monitors publish, licensed{' '}
+            <a
+              href="https://creativecommons.org/licenses/by-sa/4.0/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-accent"
+            >
+              CC-BY-SA 4.0
+            </a>
+            . These are low-cost optical sensors that read high in humid air, so every reading is adjusted with the
+            US-EPA (Barkjohn 2021) humidity correction before it enters any average shown here; raw values are
+            retained alongside. Derived data on this page carries the same license.
+          </li>
+          <li>
+            <strong className="text-foreground">
               <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-accent">
                 Open-Meteo
               </a>

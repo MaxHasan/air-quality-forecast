@@ -8,7 +8,7 @@ import {
   thresholdFor,
   verdictFor,
 } from '@/lib/thresholds';
-import { LOCATIONS, WAQI_STATIONS, DATAGOVSG_STATIONS } from '@/lib/stations';
+import { ALL_STATIONS, LOCATIONS } from '@/lib/stations';
 
 describe('verdictFor', () => {
   it('treats bounds as inclusive', () => {
@@ -96,10 +96,11 @@ describe('threshold config', () => {
  * the weather pull and the PM2.5 rollup were keyed to different places.
  */
 describe('stations.ts agrees with 0004_seed.sql', () => {
-  const seed = readFileSync(
-    fileURLToPath(new URL('../supabase/migrations/0004_seed.sql', import.meta.url)),
-    'utf8',
-  );
+  // Stations are seeded across two migrations: 0004 (waqi + datagovsg) and
+  // 0006 (airgradient). The mirror must agree with their union.
+  const seed =
+    readFileSync(fileURLToPath(new URL('../supabase/migrations/0004_seed.sql', import.meta.url)), 'utf8') +
+    readFileSync(fileURLToPath(new URL('../supabase/migrations/0006_airgradient.sql', import.meta.url)), 'utf8');
 
   it('seeds every location slug, with the same timezone', () => {
     for (const loc of LOCATIONS) {
@@ -110,7 +111,7 @@ describe('stations.ts agrees with 0004_seed.sql', () => {
   });
 
   it('seeds every verified station id', () => {
-    for (const s of [...WAQI_STATIONS, ...DATAGOVSG_STATIONS]) {
+    for (const s of ALL_STATIONS) {
       expect(seed, `station ${s.sourceStationId} missing from seed`).toContain(`'${s.sourceStationId}'`);
     }
   });
@@ -123,13 +124,13 @@ describe('stations.ts agrees with 0004_seed.sql', () => {
   it('has unique slugs and unique (source, id) station pairs', () => {
     const slugs = LOCATIONS.map((l) => l.slug);
     expect(new Set(slugs).size).toBe(slugs.length);
-    const keys = [...WAQI_STATIONS, ...DATAGOVSG_STATIONS].map((s) => `${s.source}:${s.sourceStationId}`);
+    const keys = ALL_STATIONS.map((s) => `${s.source}:${s.sourceStationId}`);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('maps every station to a known location', () => {
     const slugs = new Set(LOCATIONS.map((l) => l.slug));
-    for (const s of [...WAQI_STATIONS, ...DATAGOVSG_STATIONS]) {
+    for (const s of ALL_STATIONS) {
       expect(slugs.has(s.locationSlug)).toBe(true);
     }
   });

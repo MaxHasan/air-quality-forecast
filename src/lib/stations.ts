@@ -134,9 +134,19 @@ export function locationBySlug(slug: string): LocationConfig | null {
   return (LOCATION_BY_SLUG as Record<string, LocationConfig | undefined>)[slug] ?? null;
 }
 
-/** Locations served by a given feed source. */
+/**
+ * Locations served by a given feed source.
+ *
+ * Derived from the station registry rather than from a country rule. The
+ * earlier form was `source === 'datagovsg' ? SG : ID`, which silently sent
+ * every non-datagovsg source down the Indonesia branch — correct only by
+ * accident once AirGradient arrived, and wrong the moment one of its 15 live
+ * Singapore stations is seeded. Reading the answer off ALL_STATIONS means a new
+ * source or a re-homed station cannot desynchronise this from reality.
+ */
 export function locationsForSource(source: AqSource): LocationConfig[] {
-  return LOCATIONS.filter((l) => (source === 'datagovsg' ? l.country === 'SG' : l.country === 'ID'));
+  const slugs = new Set(ALL_STATIONS.filter((s) => s.source === source).map((s) => s.locationSlug));
+  return LOCATIONS.filter((l) => slugs.has(l.slug));
 }
 
 /** A seeded station, mirroring `stations` rows in 0004_seed.sql. */

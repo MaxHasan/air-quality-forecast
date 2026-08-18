@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CORRECTION_ID,
   correctAirGradientPm25,
+  isPlausibleRh,
   parseAirGradientWorld,
 } from '../scripts/lib/airgradient';
 
@@ -65,16 +66,38 @@ describe('correctAirGradientPm25', () => {
     expect(correctAirGradientPm25(1, 95)).toBe(0);
   });
 
-  it('clamps absurd RH into [0, 100] instead of extrapolating', () => {
-    expect(correctAirGradientPm25(40, 150)).toBe(correctAirGradientPm25(40, 100));
-    expect(correctAirGradientPm25(40, -5)).toBe(correctAirGradientPm25(40, 0));
+  it('rejects sentinel RH rather than clamping it into range', () => {
+    // The bug this guards: clamping rhum=0 to 0 and correcting anyway drops the
+    // −0.0862·RH term entirely, inflating the result by ~6.5 µg/m³ at Jakarta's
+    // typical 75% RH. Three stations in the live payload sat at rhum=0.
+    expect(correctAirGradientPm25(40, 0)).toBeNull();
+    expect(correctAirGradientPm25(40, -5)).toBeNull();
+    expect(correctAirGradientPm25(40, 150)).toBeNull();
+    // 100% RH is real weather in the tropics, not a sentinel.
+    expect(correctAirGradientPm25(40, 100)).not.toBeNull();
+  });
+
+  it('accepts extreme-but-real haze instead of clipping it away', () => {
+    // Peat-fire episodes genuinely drive these sensors into the high hundreds;
+    // dropping them would blind the app exactly when it matters most.
+    expect(correctAirGradientPm25(900, 70)).toBeGreaterThan(500);
+    expect(correctAirGradientPm25(2500, 70)).not.toBeNull();
   });
 
   it('returns null for garbage rather than a confident number', () => {
     expect(correctAirGradientPm25(Number.NaN, 50)).toBeNull();
     expect(correctAirGradientPm25(-3, 50)).toBeNull();
-    expect(correctAirGradientPm25(5000, 50)).toBeNull();
+    expect(correctAirGradientPm25(50_000, 50)).toBeNull();
     expect(correctAirGradientPm25(40, Number.NaN)).toBeNull();
+  });
+});
+
+describe('isPlausibleRh', () => {
+  it('accepts real outdoor humidity and rejects sentinels', () => {
+    for (const ok of [1, 40, 75, 99.9, 100]) expect(isPlausibleRh(ok)).toBe(true);
+    for (const bad of [0, -1, -999, 101, 999, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(isPlausibleRh(bad), `${bad} should be rejected`).toBe(false);
+    }
   });
 });
 
@@ -128,6 +151,16 @@ describe('parseAirGradientWorld', () => {
     if (!result.ok) throw new Error('expected ok');
     expect(result.readings).toHaveLength(0);
     expect(result.skipped[0]).toMatchObject({ locationId: '199980', reason: 'no-rh' });
+  });
+
+  it('drops a reading whose humidity sensor reports the 0 sentinel', () => {
+    // Present, numeric, and physically impossible outdoors — the failure mode a
+    // typeof check alone waves through.
+    const result = parseAirGradientWorld([liveRow({ rhum: 0 })], OPTS);
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.readings).toHaveLength(0);
+    expect(result.skipped[0]).toMatchObject({ locationId: '199980', reason: 'no-rh' });
+    expect(result.skipped[0].detail).toContain('rhum=0');
   });
 
   it('skips offline and stale stations with distinct reasons', () => {

@@ -85,6 +85,15 @@ export type HorizonDays = 1 | 2 | 3;
 /** Scheduled job names written to `ingestion_runs.job`. */
 export type JobName =
   | 'ingest-aq'
+  /**
+   * The sub-hourly AirGradient-only poll. A DISTINCT name from `ingest-aq`, not
+   * a cosmetic one: `getIngestionHealth` scopes its failure streak to the most
+   * recent job's own history precisely so a healthy job cannot mask a failing
+   * one. Since this job runs four times an hour it is nearly always the most
+   * recent run, so sharing the `ingest-aq` name would let its successes reset
+   * the streak and hide a WAQI outage behind a green footer.
+   */
+  | 'ingest-airgradient'
   | 'ingest-weather'
   | 'rollup'
   | 'predict'

@@ -42,12 +42,13 @@
  * permanent phantom step into every daily average that crosses it.
  *
  * The correction narrows the gap; it does not close it. `pm25_ugm3` gets the
- * corrected value, and `raw` retains {pm02, rhum, formula id} — the inputs a
- * re-derivation would need if the formula is ever revised. Note that no such
- * re-derivation script exists yet: the inputs are preserved so one *can* be
- * written, not because one is waiting. Until it is, a formula change leaves
- * stored history on the old basis. `npm run verify:colocation` measures the
- * residual against the Kemayoran BAM on demand.
+ * corrected value, and `raw` retains {pm02, rhum, formula id} — the inputs
+ * `npm run rederive:airgradient` needs to recompute stored history if the
+ * formula is ever revised. That reach is bounded: retention.ts nulls `raw`
+ * after 30 days, so anything older can never be re-derived. Raise --raw-days
+ * BEFORE payloads age out if a deeper revision is ever expected; it cannot be
+ * undone afterwards. `npm run verify:colocation` measures the residual against
+ * the Kemayoran BAM on demand.
  *
  * A reading without RH is dropped rather than half-corrected: applying the
  * slope without the RH term biases high by construction, and a silently

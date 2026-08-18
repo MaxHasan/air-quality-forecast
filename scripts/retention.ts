@@ -5,15 +5,30 @@
  *   npm run retention -- --dry-run   # count what would go, change nothing
  *   npm run retention                # actually prune
  *
- * Supabase's free tier caps the database at 500 MB. At eight locations the
- * hourly tables grow by roughly 100k rows a year, and `aq_observations.raw`
- * — a full WAQI payload per station-hour — is by far the largest thing in the
- * database, several hundred bytes for a reading whose useful content is two
- * numbers.
+ * Supabase's free tier caps the database at 500 MB, and `aq_observations.raw`
+ * — a full upstream payload per row — is by far the largest thing in it:
+ * several hundred bytes for a reading whose useful content is two numbers.
+ *
+ * Row-growth arithmetic, which changed when AirGradient arrived. The sources
+ * are polled at different rates because they publish different things:
+ *
+ *   WAQI + data.gov.sg   hourly averages, polled hourly     ~1 row/station/hour
+ *   AirGradient          instantaneous, polled 4x/hour      ~4 rows/station/hour
+ *
+ * With 9 hourly-source stations and 8 AirGradient stations that is roughly
+ * 220 + 770 = ~990 rows/day, or ~360k rows a year — against the ~100k this
+ * file previously assumed, when every station contributed one row an hour.
+ * The 400-day window below was chosen against the old figure; it still fits,
+ * but recheck the headroom before widening `--hourly-days`.
  *
  * Three tiers, in increasing order of regret:
  *
- *   1. `raw` older than 30 days is set to NULL. The payload's only job is to let
+ *   1. `raw` older than 30 days is set to NULL. NOTE this is destructive to
+ *      AirGradient re-derivation: `raw.pm02_raw` and `raw.rhum` are the inputs
+ *      `npm run rederive:airgradient` needs to recompute a revised humidity
+ *      correction, so nulling them caps re-derivation at ~30 days. Raise
+ *      --raw-days before a known formula revision, never after.
+ *      The payload's only job otherwise is to let
  *      us re-derive a reading if a parser turns out to be wrong; after a month
  *      that window has closed. `pm25_ugm3`, `pm25_aqi_us` and `aqi_table` are
  *      untouched, so a wrong breakpoint table is *still* correctable in place

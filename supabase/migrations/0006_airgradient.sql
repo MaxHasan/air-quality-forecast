@@ -153,3 +153,41 @@ from public.locations l
 where l.id = mc.location_id
   and mc.is_active
   and l.slug in ('jakarta-central', 'bsd');
+
+-- ---------------------------------------------------------------------------
+-- Admit the sub-hourly AirGradient poll as its own job name.
+--
+-- `ingestion_runs.job` carries a CHECK, so a new job name is a schema change,
+-- not just a TypeScript union member -- without this, every run of the
+-- ingest-airgradient workflow would fail to open its run row.
+--
+-- Why it needs a distinct name rather than reusing 'ingest-aq': the PWA footer
+-- scopes its failure streak to the most recent job's own history, expressly so
+-- a healthy job cannot mask a failing one. That job polls four times an hour,
+-- so it is nearly always the most recent run; sharing the name would let its
+-- successes reset the streak and hide a WAQI outage behind a green footer.
+--
+-- Same DO-block approach as the stations constraint above: find the check by
+-- its definition rather than trusting the auto-generated name, because a silent
+-- no-op drop would leave the old list in place and the failure would surface as
+-- an unloggable job rather than as a migration error.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  con record;
+begin
+  for con in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.ingestion_runs'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%job%in%'
+  loop
+    execute format('alter table public.ingestion_runs drop constraint %I', con.conname);
+  end loop;
+end $$;
+
+alter table public.ingestion_runs
+  add constraint ingestion_runs_job_check
+  check (job in ('ingest-aq', 'ingest-airgradient', 'ingest-weather', 'rollup',
+                 'predict', 'backfill', 'retention', 'calibrate', 'keepalive'));

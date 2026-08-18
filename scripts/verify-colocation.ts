@@ -2,7 +2,8 @@
  * verify-colocation.ts — measure the AirGradient correction against a
  * reference instrument, on demand.
  *
- * Run:  npm run verify:colocation
+ * Run:  npm run verify:colocation                # live spot check (no database)
+ *       npm run verify:colocation -- --hours 48  # stored hourly means (preferred)
  *
  * The accident of geography this exploits: AirGradient location 199980
  * ("BMKG 1") sits at BMKG headquarters in Kemayoran, a few hundred meters from
@@ -42,7 +43,8 @@
 
 import { STALE_FEED_HOURS } from '../src/lib/stations';
 import { AIRGRADIENT_WORLD_URL, parseAirGradientWorld } from './lib/airgradient';
-import { DbFailure, describeDbError, serviceClient } from './lib/db';
+import { DbFailure, describeDbError } from './lib/db';
+import { getAnonClient } from '../src/lib/db';
 import { fetchJson } from './lib/http';
 import { intFlag } from './lib/run-log';
 import { parseWaqiFeed } from './lib/waqi';
@@ -83,7 +85,13 @@ function hourlyMeans(rows: readonly ObsRow[], pick: (r: ObsRow) => number | null
  * manufacture a disagreement that never happened.
  */
 async function compareStoredHours(hours: number): Promise<void> {
-  const db = serviceClient();
+  // The ANON client, not the service role. This function only reads, and both
+  // tables it touches grant anon SELECT under 0003_rls.sql. Demanding the
+  // RLS-bypassing key for a read-only calibration check would put that
+  // credential in every environment where someone wants to sanity-check the
+  // correction — a write key spread around for the convenience of a script
+  // that never writes.
+  const db = getAnonClient();
   const since = new Date(Date.now() - hours * 3_600_000).toISOString();
 
   const { data: stations, error: stationErr } = await db

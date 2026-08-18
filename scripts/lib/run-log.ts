@@ -287,34 +287,43 @@ export function hasFlag(argv: readonly string[], flag: string): boolean {
 }
 
 /**
- * Read `--name value` or `--name=value` as a positive integer.
- *
- * Returns the fallback for a missing flag, but throws for a *present but
- * unparseable* one: `--days banana` silently becoming `--days 3` is how a
- * backfill quietly does nothing.
- */
-/**
  * Read `--name=value` (or `--name value`) as a string, or `fallback`.
  *
- * Returns the fallback for a present-but-empty flag, so `--only=` behaves like
- * "not specified" rather than selecting a source called "".
+ * Follows the same rule as `intFlag` below, for the same reason: a missing flag
+ * takes the fallback, but a flag that is *present and valueless* throws. The
+ * tempting alternative — treat `--only` with nothing after it as "not
+ * specified" — means a typo runs the opposite of what was asked: `--only`
+ * followed by `--dry-run` would silently ingest every source, spending the WAQI
+ * calls the caller was trying to avoid.
  */
 export function stringFlag(argv: readonly string[], flag: string, fallback: string | null): string | null {
   const prefixed = `--${flag}=`;
   for (const [i, arg] of argv.entries()) {
     if (arg.startsWith(prefixed)) {
       const value = arg.slice(prefixed.length).trim();
-      return value === '' ? fallback : value;
+      if (value === '') throw new DbFailure(`--${flag} was given no value (use --${flag}=<value>)`);
+      return value;
     }
     if (arg === `--${flag}`) {
       const next = argv[i + 1];
-      if (next && !next.startsWith('--')) return next.trim() || fallback;
-      return fallback;
+      // A following token that itself looks like a flag is the next option, not
+      // this one's value.
+      if (next === undefined || next.startsWith('--') || next.trim() === '') {
+        throw new DbFailure(`--${flag} was given no value (use --${flag}=<value>)`);
+      }
+      return next.trim();
     }
   }
   return fallback;
 }
 
+/**
+ * Read `--name value` or `--name=value` as a positive integer.
+ *
+ * Returns the fallback for a missing flag, but throws for a *present but
+ * unparseable* one: `--days banana` silently becoming `--days 3` is how a
+ * backfill quietly does nothing.
+ */
 export function intFlag(argv: readonly string[], flag: string, fallback: number): number {
   const idx = argv.findIndex((a) => a === `--${flag}` || a.startsWith(`--${flag}=`));
   if (idx === -1) return fallback;

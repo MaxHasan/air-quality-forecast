@@ -26,6 +26,13 @@
  * It is idempotent by construction: a second run recomputes the same inputs
  * with the same formula and finds nothing to change.
  *
+ * THE 30-DAY CEILING, stated up front because it limits everything below:
+ * retention.ts nulls `raw` after 30 days while keeping the rows themselves for
+ * 400. Once that happens the pm02_raw and rhum behind a reading are gone and it
+ * can never be re-derived. So re-derivation reaches back about a month, not
+ * over the whole history, and the script reports how many rows it could not
+ * touch rather than quietly passing over them.
+ *
  * A row whose raw inputs are missing or implausible is REPORTED, NEVER
  * SILENTLY DROPPED — it means the writer stored something it should not have,
  * and quietly leaving it in place while claiming a clean re-derivation would
@@ -33,7 +40,7 @@
  */
 
 import { CORRECTION_ID, correctAirGradientPm25, isPlausibleRh } from './lib/airgradient';
-import { DbFailure, describeDbError, serviceClient } from './lib/db';
+import { describeDbError, loadStations, selectAllPages, serviceClient } from './lib/db';
 import { hasFlag, intFlag, reportFatal } from './lib/run-log';
 
 interface StoredRow {
@@ -43,9 +50,6 @@ interface StoredRow {
   raw: { pm02_raw?: unknown; rhum?: unknown; correction?: unknown } | null;
 }
 
-/** Rows are read in pages; PostgREST silently caps a select at 1000. */
-const PAGE = 1000;
-
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const write = hasFlag(argv, 'write');
@@ -53,26 +57,44 @@ async function main(): Promise<void> {
 
   const db = serviceClient();
 
-  // Identified by the provenance stamp rather than by joining stations: a
-  // station that ever changed source would otherwise orphan its own history.
-  const rows: StoredRow[] = [];
-  for (let offset = 0; ; offset += PAGE) {
-    let query = db
+  // Selected by station_id, NOT by `raw->>source`.
+  //
+  // The provenance stamp looks like the natural key and is a trap: retention.ts
+  // sets `raw` to NULL after 30 days while keeping the rows themselves for 400,
+  // so a `raw->>source` filter silently stops matching everything older than a
+  // month. This script would then report a confident clean pass over 30 days of
+  // a 400-day history without ever hinting at the 370 it never looked at —
+  // which is precisely the failure mode a safety net must not have.
+  //
+  // Selecting by station id also uses the primary key instead of an unindexed
+  // jsonb expression scan, and it surfaces the rows whose raw payload has been
+  // pruned so they can be reported as unrecoverable rather than skipped.
+  const stations = await loadStations(db, false);
+  const agStationIds = stations.filter((s) => s.source === 'airgradient').map((s) => s.id);
+
+  if (agStationIds.length === 0) {
+    console.log('No AirGradient stations seeded — nothing to re-derive.');
+    console.log('Apply supabase/migrations/0006_airgradient.sql first.');
+    return;
+  }
+
+  const since = days > 0 ? new Date(Date.now() - days * 86_400_000).toISOString() : null;
+
+  // `selectAllPages` (scripts/lib/db.ts) rather than hand-rolled paging: it
+  // pages below the PostgREST ceiling and its contract requires the stable sort
+  // that offset pagination needs. `observed_at` alone is not unique across
+  // stations, so ties spanning a page boundary could be skipped or double-read;
+  // ordering by (observed_at, station_id) is total.
+  const rows = await selectAllPages<StoredRow>('reading AirGradient observations', (from, to) => {
+    let q = db
       .from('aq_observations')
       .select('station_id, observed_at, pm25_ugm3, raw')
-      .eq('raw->>source', 'airgradient')
-      .order('observed_at', { ascending: false });
-
-    if (days > 0) {
-      query = query.gte('observed_at', new Date(Date.now() - days * 86_400_000).toISOString());
-    }
-
-    const { data, error } = await query.range(offset, offset + PAGE - 1).returns<StoredRow[]>();
-    if (error) throw new DbFailure(describeDbError('reading aq_observations', error));
-    if (!data || data.length === 0) break;
-    rows.push(...data);
-    if (data.length < PAGE) break;
-  }
+      .in('station_id', agStationIds)
+      .order('observed_at', { ascending: false })
+      .order('station_id', { ascending: true });
+    if (since) q = q.gte('observed_at', since);
+    return q.range(from, to).returns<StoredRow[]>();
+  });
 
   if (rows.length === 0) {
     console.log('No AirGradient observations stored yet — nothing to re-derive.');
@@ -81,9 +103,19 @@ async function main(): Promise<void> {
 
   const changed: { row: StoredRow; from: number | null; to: number; delta: number }[] = [];
   const unusable: { row: StoredRow; why: string }[] = [];
+  // Counted separately from `unusable`: a pruned payload is retention working
+  // as designed, not a defect, but it is still a hard limit on what this script
+  // can repair and the operator must see its size.
+  let pruned = 0;
   let identical = 0;
 
   for (const row of rows) {
+    // `raw` nulled by retention (RAW_DAYS = 30) — the inputs are simply gone.
+    if (row.raw === null) {
+      pruned += 1;
+      continue;
+    }
+
     const rawPm = typeof row.raw?.pm02_raw === 'number' ? row.raw.pm02_raw : null;
     const rh = typeof row.raw?.rhum === 'number' ? row.raw.rhum : null;
 
@@ -112,14 +144,33 @@ async function main(): Promise<void> {
   }
 
   /* -- report ------------------------------------------------------------- */
-  const stamps = new Set(rows.map((r) => (typeof r.raw?.correction === 'string' ? r.raw.correction : '(none)')));
+  const stamps = new Set(
+    rows.filter((r) => r.raw !== null).map((r) => (typeof r.raw?.correction === 'string' ? r.raw.correction : '(none)')),
+  );
   console.log(`AirGradient re-derivation — ${rows.length} stored row(s)`);
   console.log('-'.repeat(64));
   console.log(`  formula in code          ${CORRECTION_ID}`);
-  console.log(`  formulas stamped on rows ${[...stamps].join(', ')}`);
+  console.log(`  formulas stamped on rows ${[...stamps].join(', ') || '(none)'}`);
   console.log(`  unchanged                ${identical}`);
   console.log(`  would change             ${changed.length}`);
   console.log(`  unusable inputs          ${unusable.length}`);
+  console.log(`  raw pruned by retention  ${pruned}`);
+
+  if (pruned > 0) {
+    // Stated loudly and unprompted. The whole value of this script is that an
+    // operator can trust its "clean pass"; a clean pass over the 30 days that
+    // still have inputs, silently ignoring everything older, would be a lie of
+    // omission at exactly the moment someone is relying on it.
+    const pct = ((pruned / rows.length) * 100).toFixed(0);
+    console.log(
+      `\n  NOTE: ${pruned} row(s) (${pct}%) have had their raw payload pruned by retention\n` +
+        '  (scripts/retention.ts nulls `raw` after 30 days while keeping rows for 400).\n' +
+        '  Those readings CANNOT be re-derived — their pm02_raw and rhum no longer exist.\n' +
+        '  Re-derivation is therefore only ever possible for roughly the last 30 days.\n' +
+        '  If a formula revision must reach further back, raise --raw-days in retention\n' +
+        '  BEFORE the payloads age out; it cannot be undone afterwards.',
+    );
+  }
 
   if (changed.length > 0) {
     const deltas = changed.map((c) => c.delta);

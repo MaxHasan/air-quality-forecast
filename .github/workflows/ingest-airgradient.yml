@@ -53,7 +53,9 @@ jobs:
       - run: npm ci
 
       # No WAQI_TOKEN: --only=airgradient never touches WAQI, and a job should
-      # not be handed a credential it has no use for.
+      # not be handed a credential it has no use for. The run logs itself as
+      # job='ingest-airgradient' (not 'ingest-aq'), so the footer's failure
+      # streak cannot let this job's four-an-hour successes mask a WAQI outage.
       - name: Sample AirGradient
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

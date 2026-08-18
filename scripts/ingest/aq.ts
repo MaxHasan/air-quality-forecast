@@ -32,9 +32,9 @@
  *   air, so the US-EPA (Barkjohn 2021) humidity correction is applied before
  *   anything is stored — see scripts/lib/airgradient.ts for the whole story.
  *   `pm25_ugm3` gets the corrected value; `raw` retains pm02 + RH + formula id,
- *   which are the inputs a re-derivation would need if the correction is ever
- *   revised. No re-derivation script exists yet — the inputs are kept so one
- *   can be written.
+ *   which `npm run rederive:airgradient` uses to recompute history if the
+ *   correction is revised — for about 30 days, after which retention nulls
+ *   `raw` and the inputs are gone for good.
  *
  * ---------------------------------------------------------------------------
  * Failure policy
@@ -53,7 +53,7 @@
 import { DEFAULT_AQI_TABLE_ID } from '../../src/lib/aqi';
 import { addLocalDays, todayLocalDate } from '../../src/lib/format';
 import { DORMANT_STATION_DAYS, STALE_FEED_HOURS } from '../../src/lib/stations';
-import type { AqObservationInsert, Json, SgRegionName } from '../../src/lib/types';
+import type { AqObservationInsert, JobName, Json, SgRegionName } from '../../src/lib/types';
 import { AIRGRADIENT_WORLD_URL, parseAirGradientWorld } from '../lib/airgradient';
 import { parseDataGovSgPm25 } from '../lib/datagovsg';
 import { DbFailure, describeDbError, loadStations, serviceClient, upsertChunked, type StationRecord } from '../lib/db';
@@ -404,16 +404,15 @@ async function main(): Promise<void> {
   const only = stringFlag(argv, 'only', null);
   const now = new Date();
 
-  await runJob('ingest-aq', { dryRun, meta: { stale_feed_hours: STALE_FEED_HOURS, aqi_table: DEFAULT_AQI_TABLE_ID } }, async (run) => {
+  // A distinct job name for the AirGradient-only poll, because the PWA footer
+  // scopes its failure streak to the most recent job's own history so that a
+  // healthy job cannot mask a failing one. This job runs four times an hour and
+  // would otherwise almost always be the newest run, resetting the streak and
+  // hiding a WAQI outage behind a green footer.
+  const jobName: JobName = only === 'airgradient' ? 'ingest-airgradient' : 'ingest-aq';
+
+  await runJob(jobName, { dryRun, meta: { stale_feed_hours: STALE_FEED_HOURS, aqi_table: DEFAULT_AQI_TABLE_ID, ...(only ? { only } : {}) } }, async (run) => {
     const token = process.env.WAQI_TOKEN?.trim();
-    if (!token && only !== 'airgradient' && only !== 'datagovsg') {
-      throw new DbFailure(
-        'Missing WAQI_TOKEN.\n' +
-          '  Locally:  add it to .env.local (see .env.example).\n' +
-          '  In CI:    set it as the repository secret WAQI_TOKEN.\n' +
-          '  Request one at https://aqicn.org/data-platform/token/',
-      );
-    }
 
     /* -- which stations ---------------------------------------------------- */
     let stations: StationRecord[];
@@ -445,13 +444,29 @@ async function main(): Promise<void> {
     const sgStations = wants('datagovsg') ? stations.filter((s) => s.source === 'datagovsg') : [];
     const agStations = wants('airgradient') ? stations.filter((s) => s.source === 'airgradient') : [];
     const seen: SeenMap = new Map();
-    if (only) console.log(`[ingest-aq] --only=${only}`);
+    if (only) console.log(`[${jobName}] --only=${only}`);
 
     /* -- fetch ------------------------------------------------------------- */
     let waqiRows: AqObservationInsert[] = [];
     if (waqiStations.length > 0) {
+      // Checked here rather than trusting the earlier `--only` guard: the token
+      // is required exactly when there is a WAQI station to fetch, and stating
+      // that at the call site keeps the guarantee local. Relying on the flag
+      // logic 40 lines up would silently break the day a fourth source joins
+      // the `--only` whitelist, sending `?token=undefined` to every station and
+      // reporting the resulting 401s against the stations rather than the
+      // missing credential.
+      if (!token) {
+        throw new DbFailure(
+          'Missing WAQI_TOKEN, but this run has WAQI stations to fetch.\n' +
+            '  Locally:  add it to .env.local (see .env.example).\n' +
+            '  In CI:    set it as the repository secret WAQI_TOKEN.\n' +
+            '  Request one at https://aqicn.org/data-platform/token/\n' +
+            '  Or restrict the run: --only=airgradient / --only=datagovsg',
+        );
+      }
       console.log(`WAQI — ${waqiStations.length} station(s)`);
-      waqiRows = await ingestWaqi(run, waqiStations, token as string, now, seen);
+      waqiRows = await ingestWaqi(run, waqiStations, token, now, seen);
     }
 
     let sgRows: AqObservationInsert[] = [];

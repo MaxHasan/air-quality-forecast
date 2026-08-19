@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ACTIVITY_THRESHOLDS,
@@ -97,11 +98,22 @@ describe('threshold config', () => {
  * different places.
  */
 describe('stations.ts agrees with the seed migrations', () => {
-  // Stations are seeded across two migrations: 0004 (waqi + datagovsg) and
-  // 0006 (airgradient). The mirror must agree with their union.
-  const seed =
-    readFileSync(fileURLToPath(new URL('../supabase/migrations/0004_seed.sql', import.meta.url)), 'utf8') +
-    readFileSync(fileURLToPath(new URL('../supabase/migrations/0006_airgradient.sql', import.meta.url)), 'utf8');
+  // Locations and stations are seeded across several migrations -- 0004 (waqi +
+  // datagovsg), 0006 (airgradient), 0007 (the Jakarta regions + bekasi) -- and
+  // the mirror must agree with their union.
+  //
+  // Read by globbing the directory rather than by naming the files. The named
+  // list went stale the moment 0007 landed: `jakarta-north` was in stations.ts
+  // and in a migration, but not in either of the two files this test happened
+  // to read, so a correct registry failed and the fix was to edit the test. A
+  // sync check that has to be updated by hand every time the thing it guards
+  // changes is a sync check that will eventually be updated wrongly.
+  const migrationsDir = fileURLToPath(new URL('../supabase/migrations/', import.meta.url));
+  const seed = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => readFileSync(join(migrationsDir, f), 'utf8'))
+    .join('\n');
 
   it('seeds every location slug, with the same timezone', () => {
     for (const loc of LOCATIONS) {

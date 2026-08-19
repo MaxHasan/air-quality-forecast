@@ -39,10 +39,23 @@ export type TimeZone = 'Asia/Jakarta' | 'Asia/Makassar' | 'Asia/Singapore';
 /** ISO 3166-1 alpha-2, constrained to the countries we cover. */
 export type CountryCode = 'ID' | 'SG';
 
-/** Seeded location slugs. Adding one means a migration + a `stations.ts` entry. */
+/**
+ * Seeded location slugs. Adding one means a migration + a `stations.ts` entry.
+ *
+ * Jakarta is decomposed by DKI administrative city, the same way Singapore is
+ * decomposed by NEA region, because a 30 km metropolis does not have one air
+ * quality. `jakarta-east` is deliberately absent: Jakarta Timur has no public
+ * PM2.5 feed in any network we can reach (verified 2026-08-19), and a location
+ * with no ground truth could never be scored or calibrated. `bekasi` is its
+ * own city rather than a stand-in for it — see 0007_jakarta_regions.sql.
+ */
 export type LocationSlug =
   | 'jakarta-central'
+  | 'jakarta-north'
+  | 'jakarta-south'
+  | 'jakarta-west'
   | 'bsd'
+  | 'bekasi'
   | 'bali-denpasar'
   | 'sg-central'
   | 'sg-north'

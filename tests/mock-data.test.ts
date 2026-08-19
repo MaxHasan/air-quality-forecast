@@ -24,15 +24,39 @@ describe('mock data seam', () => {
     expect(forecasts.map((f) => f.location.slug)).toEqual(LOCATIONS.map((l) => l.slug));
   });
 
-  it('gives calibrated-at-launch locations a wind_regression model and a non-calibrating headline', async () => {
-    for (const slug of ['jakarta-central', 'bsd'] as const) {
+  // Driven off `calibratedAtLaunch` rather than a hardcoded pair, so the six
+  // Jabodetabek locations are covered without anyone remembering to add them.
+  const CALIBRATED = LOCATIONS.filter((l) => l.calibratedAtLaunch).map((l) => l.slug);
+
+  it('gives every calibrated-at-launch location a wind_regression model and no calibrating banner', async () => {
+    expect(CALIBRATED).toHaveLength(6); // all of Jabodetabek
+    for (const slug of CALIBRATED) {
       const f = await getLocationForecast(slug);
-      expect(f).not.toBeNull();
-      expect(f!.calibrating).toBe(false);
-      expect(f!.models.map((m) => m.model)).toContain('wind_regression');
-      expect(f!.headline).not.toBeNull();
-      expect(f!.headline!.n).toBeGreaterThanOrEqual(MIN_SCORED_DAYS_FOR_RANKING);
+      expect(f, slug).not.toBeNull();
+      expect(f!.models.map((m) => m.model), slug).toContain('wind_regression');
+      expect(f!.headline, slug).not.toBeNull();
+      // A fitted model means the "no wind model fitted yet" banner must stay
+      // down, INDEPENDENTLY of whether enough days have been scored to rank it.
+      // The four locations added by 0007 are precisely the case that separates
+      // those two questions: real coefficients, only days of scored history.
+      expect(f!.calibrating, slug).toBe(false);
     }
+  });
+
+  it('separates "has a fitted model" from "has enough scored days to rank it"', async () => {
+    // jakarta-central has both. jakarta-north has the first and not the second
+    // — the state that used to be unrepresentable, and the one the mock's
+    // calibrating rule got wrong until it was aligned with queries.ts.
+    const ranked = await getLocationForecast('jakarta-central');
+    expect(ranked!.headline!.n).toBeGreaterThanOrEqual(MIN_SCORED_DAYS_FOR_RANKING);
+
+    const unranked = await getLocationForecast('jakarta-north');
+    expect(unranked!.calibrating).toBe(false);
+    expect(unranked!.models.map((m) => m.model)).toContain('wind_regression');
+    expect(unranked!.models.every((m) => m.n < MIN_SCORED_DAYS_FOR_RANKING)).toBe(true);
+    // Unranked means MAE is withheld, not that the prediction is.
+    expect(unranked!.models.every((m) => m.mae === null)).toBe(true);
+    expect(unranked!.headline!.predicted_pm25).toBeGreaterThan(0);
   });
 
   it('marks Bali and every Singapore location as calibrating, with no wind_regression', async () => {
@@ -114,7 +138,7 @@ describe('mock data seam', () => {
 
     // Every location with a fitted wind model must tell the same story, not just
     // whichever one the fixture noise happened to favour.
-    for (const slug of ['jakarta-central', 'bsd'] as const) {
+    for (const slug of CALIBRATED) {
       expect(at(slug, 1, 'persistence')).toBeLessThan(at(slug, 1, 'wind_regression'));
       expect(at(slug, 2, 'wind_regression')).toBeLessThan(at(slug, 2, 'persistence'));
       expect(at(slug, 3, 'wind_regression')).toBeLessThan(at(slug, 3, 'persistence'));

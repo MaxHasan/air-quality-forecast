@@ -61,7 +61,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { olsFit2, olsPredict, type OlsFit, type OlsSample } from '../../src/lib/regression';
 import { LOCATIONS, type LocationConfig } from '../../src/lib/stations';
-import type { HorizonDays, LocationSlug, ModelCoefficientsInsert } from '../../src/lib/types';
+import type { HorizonDays, Json, LocationSlug, ModelCoefficientsInsert } from '../../src/lib/types';
 
 const DATA_DIR = join(process.cwd(), 'data', 'historical');
 const CACHE_DIR = join(DATA_DIR, 'era5');
@@ -310,7 +310,18 @@ join public.locations l on l.slug = v.location_slug
 on conflict (location_id, model, version) do update set
   intercept = excluded.intercept,
   coef      = excluded.coef,
-  stats     = excluded.stats,
+  -- MERGE, not replace. \`stats\` carries two different kinds of thing: what
+  -- this script measures (r2, n, rmse, holdout...), and annotations other
+  -- migrations stamp on afterwards. 0006 writes \`station_mix_changed_at\` here
+  -- expressly so the note "this location's ground truth changed instrument mix
+  -- on date X" travels with the model instead of living only in a migration
+  -- nobody re-reads.
+  --
+  -- \`stats = excluded.stats\` silently deleted it: a refit is not evidence the
+  -- discontinuity did not happen. Applying 0007 wiped the stamp off both
+  -- jakarta-central and bsd exactly that way. Concatenating instead means the
+  -- freshly measured keys win and anything else stamped on survives.
+  stats     = coalesce(public.model_coefficients.stats, '{}'::jsonb) || excluded.stats,
   is_active = excluded.is_active;
 `;
 }
@@ -319,9 +330,38 @@ on conflict (location_id, model, version) do update set
 /* Main                                                                       */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Locations with a 2022-2023 Nafas archive to fit on.
+ *
+ * The archive was always per-city -- ten CSVs covering DKI's five
+ * administrative cities plus five satellites -- but until the Jakarta
+ * decomposition (0007) the app had one location for the whole of Jakarta, so
+ * eight of the ten files went unused. Every Jabodetabek location now maps to
+ * exactly one file, at the same grain the file was collected at.
+ *
+ * Two consequences worth being deliberate about:
+ *
+ *  - Nafas's per-city series is a mean over that city's sensors, while the
+ *    live `daily_aq` for these locations is a mean over the one or two feeds
+ *    seeded in 0007. Same city, different instrument mix -- so the fit and the
+ *    thing it is scored against are not the same measurement, and the gates
+ *    below (and /models in production) are what keep that honest.
+ *  - `nafas_east_jakarta.csv` is deliberately absent. There is no
+ *    `jakarta-east` location, because Jakarta Timur has no live feed; fitting
+ *    coefficients for a location that can never supply `pm25_lag` at inference
+ *    would produce a model that cannot run. The file stays staged for the day
+ *    a feed appears.
+ *
+ * The remaining unused satellites -- bogor, depok, tangerang -- have archives
+ * but no location, which is the reverse problem and a much easier one.
+ */
 const TRAINABLE: { slug: LocationSlug; file: string }[] = [
   { slug: 'jakarta-central', file: 'nafas_central_jakarta.csv' },
+  { slug: 'jakarta-north', file: 'nafas_north_jakarta.csv' },
+  { slug: 'jakarta-south', file: 'nafas_south_jakarta.csv' },
+  { slug: 'jakarta-west', file: 'nafas_west_jakarta.csv' },
   { slug: 'bsd', file: 'nafas_south_tangerang.csv' },
+  { slug: 'bekasi', file: 'nafas_bekasi.csv' },
 ];
 
 async function main(): Promise<void> {
@@ -477,6 +517,20 @@ async function main(): Promise<void> {
     if (error) throw new Error(`Could not read locations: ${error.message}`);
     const idBySlug = new Map((locs ?? []).map((l) => [l.slug, l.id]));
 
+    // Existing `stats`, so annotations stamped on by other migrations survive
+    // the refit. Same reasoning as the `||` in toSql(): PostgREST's upsert
+    // replaces the whole row, so without this read the write would delete
+    // 0006's `station_mix_changed_at` the way applying 0007 did.
+    const { data: existing, error: existingError } = await db
+      .from('model_coefficients')
+      .select('location_id, version, stats')
+      .eq('model', 'wind_regression')
+      .returns<{ location_id: number; version: number; stats: Record<string, Json> | null }[]>();
+    if (existingError) throw new Error(`Could not read model_coefficients: ${existingError.message}`);
+    const statsByKey = new Map(
+      (existing ?? []).map((e) => [`${e.location_id}:${e.version}`, e.stats ?? {}]),
+    );
+
     for (const r of seedable) {
       const location_id = idBySlug.get(r.loc.slug);
       if (location_id === undefined) {
@@ -490,6 +544,7 @@ async function main(): Promise<void> {
         intercept: r.final.intercept,
         coef: { pm25_lag: r.final.b1, wind_speed_avg_ms: r.final.b2 },
         stats: {
+          ...statsByKey.get(`${location_id}:1`),
           r2: r.final.r2,
           adj_r2: r.final.adjR2,
           n: r.final.n,

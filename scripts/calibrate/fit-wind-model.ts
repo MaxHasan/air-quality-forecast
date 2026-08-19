@@ -59,9 +59,17 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { olsFit2, olsPredict, type OlsFit, type OlsSample } from '../../src/lib/regression';
 import { LOCATIONS, type LocationConfig } from '../../src/lib/stations';
-import type { HorizonDays, Json, LocationSlug, ModelCoefficientsInsert } from '../../src/lib/types';
+import type {
+  HorizonDays,
+  Json,
+  LocationSlug,
+  ModelCoefficientMap,
+  ModelCoefficientsInsert,
+  ModelFitStats,
+} from '../../src/lib/types';
 
 const DATA_DIR = join(process.cwd(), 'data', 'historical');
 const CACHE_DIR = join(DATA_DIR, 'era5');
@@ -69,6 +77,14 @@ const ARCHIVE_START = '2021-12-31';
 const ARCHIVE_END = '2023-12-15';
 const TRAIN_FRACTION = 0.8;
 const HORIZONS: HorizonDays[] = [1, 2, 3];
+
+/**
+ * Version stamped on every seeded coefficient row, and the key
+ * `model_coefficients` conflicts on. Named because it was previously the bare
+ * literal `1` in the SQL template, in the inserted row and in the lookup key
+ * that pairs them -- three places that had to agree with nothing enforcing it.
+ */
+const COEFFICIENT_VERSION = 1;
 
 /* -------------------------------------------------------------------------- */
 /* Loading                                                                    */
@@ -270,31 +286,102 @@ function report(r: LocationResult): void {
   for (const g of r.gates) console.log(`    ${g}`);
 }
 
+/**
+ * Every key this script measures, and therefore fully owns on each refit.
+ *
+ * `stats` holds two different kinds of thing: what a fit measured, and
+ * annotations other migrations stamp on afterwards (0006 writes
+ * `station_mix_changed_at`). Refitting must replace all of the first and
+ * preserve all of the second. Naming the owned keys is what lets
+ * `mergeStats` do that without having to know what the annotations are.
+ *
+ * A key REMOVED from `buildStats` must stay in this list, or the stale value
+ * it last wrote will survive every future refit as though it were current.
+ */
+const MEASURED_STATS_KEYS = [
+  'r2',
+  'adj_r2',
+  'n',
+  'rmse',
+  'period_start',
+  'period_end',
+  'source',
+  'specification',
+  'holdout',
+] as const;
+
+/**
+ * The fit's own description of itself. ONE definition, used by both the
+ * generated SQL and the `--write` path.
+ *
+ * They used to build this separately and had drifted: `--sql` emitted
+ * `holdout` and `--write` did not, and `--sql` rounded while `--write` stored
+ * raw floats. Harmless while each replaced `stats` wholesale — but once the
+ * write started merging (to stop it deleting 0006's annotations), the
+ * divergence turned into a real defect: a `--write` refit kept the previous
+ * `--sql` run's `holdout` and reattributed another fit's backtest MAE to the
+ * new coefficients. Two paths that write the same row must build it the same
+ * way, so there is now only one place to change.
+ */
+function buildStats(r: LocationResult): ModelFitStats {
+  return {
+    r2: Number(r.final.r2.toFixed(6)),
+    adj_r2: Number(r.final.adjR2.toFixed(6)),
+    n: r.final.n,
+    rmse: Number(r.final.rmse.toFixed(4)),
+    period_start: r.firstDate,
+    period_end: r.lastDate,
+    source: 'nafas-pm25 x era5-weather 2022-2023',
+    specification: 'lagged_pm25 + same_day_wind',
+    holdout: Object.fromEntries(
+      r.skill.map((s) => [
+        `h${s.horizon}`,
+        { hybrid: Number(s.hybrid.toFixed(2)), persistence: Number(s.persistence.toFixed(2)) },
+      ]),
+    ),
+  };
+}
+
+/** The fitted slopes, by predictor name. Read by name in predict.ts, never by position. */
+function buildCoef(r: LocationResult): ModelCoefficientMap {
+  return {
+    pm25_lag: Number(r.final.b1.toFixed(6)),
+    wind_speed_avg_ms: Number(r.final.b2.toFixed(6)),
+  };
+}
+
+/**
+ * Fresh measurements over an existing row's `stats`, keeping foreign
+ * annotations and dropping every measured key the old row carried.
+ *
+ * Exported for tests: the failure this prevents is invisible in the output
+ * (every value looks plausible) and only appears months later as a fit
+ * described by another fit's numbers.
+ */
+export function mergeStats(
+  existing: Record<string, Json | undefined> | null | undefined,
+  fresh: ModelFitStats,
+): ModelFitStats {
+  const kept: Record<string, Json | undefined> = {};
+  for (const [k, v] of Object.entries(existing ?? {})) {
+    if (!(MEASURED_STATS_KEYS as readonly string[]).includes(k)) kept[k] = v;
+  }
+  // `fresh` last, so it wins on any key that survived the filter.
+  return { ...kept, ...fresh };
+}
+
+/** MEASURED_STATS_KEYS as a Postgres text[] literal, for the jsonb `-` below. */
+function sqlKeyArray(): string {
+  return `array[${MEASURED_STATS_KEYS.map((k) => `'${k}'`).join(', ')}]::text[]`;
+}
+
 function toSql(results: LocationResult[]): string {
   const rows = results
     .filter((r) => r.passes)
     .map((r) => {
-      const coef = JSON.stringify({
-        pm25_lag: Number(r.final.b1.toFixed(6)),
-        wind_speed_avg_ms: Number(r.final.b2.toFixed(6)),
-      });
-      const stats = JSON.stringify({
-        r2: Number(r.final.r2.toFixed(6)),
-        adj_r2: Number(r.final.adjR2.toFixed(6)),
-        n: r.final.n,
-        rmse: Number(r.final.rmse.toFixed(4)),
-        period_start: r.firstDate,
-        period_end: r.lastDate,
-        source: 'nafas-pm25 x era5-weather 2022-2023',
-        specification: 'lagged_pm25 + same_day_wind',
-        holdout: Object.fromEntries(
-          r.skill.map((s) => [
-            `h${s.horizon}`,
-            { hybrid: Number(s.hybrid.toFixed(2)), persistence: Number(s.persistence.toFixed(2)) },
-          ]),
-        ),
-      });
-      return `  ('${r.loc.slug}', 1, ${r.final.intercept.toFixed(6)}, '${coef}'::jsonb, '${stats}'::jsonb)`;
+      const coef = JSON.stringify(buildCoef(r));
+      const stats = JSON.stringify(buildStats(r));
+      return `  ('${r.loc.slug}', ${COEFFICIENT_VERSION}, ${r.final.intercept.toFixed(6)}, '${coef}'::jsonb, '${stats}'::jsonb)`;
     });
 
   if (rows.length === 0) return '-- nothing passed the gates; no coefficients to seed\n';
@@ -310,18 +397,25 @@ join public.locations l on l.slug = v.location_slug
 on conflict (location_id, model, version) do update set
   intercept = excluded.intercept,
   coef      = excluded.coef,
-  -- MERGE, not replace. \`stats\` carries two different kinds of thing: what
-  -- this script measures (r2, n, rmse, holdout...), and annotations other
-  -- migrations stamp on afterwards. 0006 writes \`station_mix_changed_at\` here
-  -- expressly so the note "this location's ground truth changed instrument mix
-  -- on date X" travels with the model instead of living only in a migration
-  -- nobody re-reads.
+  -- MERGE, not replace, and drop this script's own keys before merging.
   --
-  -- \`stats = excluded.stats\` silently deleted it: a refit is not evidence the
-  -- discontinuity did not happen. Applying 0007 wiped the stamp off both
-  -- jakarta-central and bsd exactly that way. Concatenating instead means the
-  -- freshly measured keys win and anything else stamped on survives.
-  stats     = coalesce(public.model_coefficients.stats, '{}'::jsonb) || excluded.stats,
+  -- \`stats\` carries two different kinds of thing: what this fit measured
+  -- (r2, n, rmse, holdout...), and annotations other migrations stamp on
+  -- afterwards -- 0006 writes \`station_mix_changed_at\` here expressly so the
+  -- note "this location's ground truth changed instrument mix on date X"
+  -- travels with the model instead of living only in a migration nobody
+  -- re-reads.
+  --
+  -- \`stats = excluded.stats\` deleted the annotations: a refit is not evidence
+  -- the discontinuity did not happen. Applying 0007 wiped the stamp off both
+  -- jakarta-central and bsd exactly that way.
+  --
+  -- A plain \`||\` fixes that but introduces the mirror-image fault: any
+  -- measured key this script STOPS emitting would keep its stale value
+  -- forever, silently described as current. Subtracting the owned keys first
+  -- means a refit fully replaces its own measurements and preserves
+  -- everything else -- the same contract as mergeStats() on the --write path.
+  stats     = (coalesce(model_coefficients.stats, '{}'::jsonb) - ${sqlKeyArray()}) || excluded.stats,
   is_active = excluded.is_active;
 `;
 }
@@ -525,7 +619,7 @@ async function main(): Promise<void> {
       .from('model_coefficients')
       .select('location_id, version, stats')
       .eq('model', 'wind_regression')
-      .returns<{ location_id: number; version: number; stats: Record<string, Json> | null }[]>();
+      .returns<{ location_id: number; version: number; stats: ModelFitStats | null }[]>();
     if (existingError) throw new Error(`Could not read model_coefficients: ${existingError.message}`);
     const statsByKey = new Map(
       (existing ?? []).map((e) => [`${e.location_id}:${e.version}`, e.stats ?? {}]),
@@ -540,20 +634,10 @@ async function main(): Promise<void> {
       const row: ModelCoefficientsInsert = {
         location_id,
         model: 'wind_regression',
-        version: 1,
-        intercept: r.final.intercept,
-        coef: { pm25_lag: r.final.b1, wind_speed_avg_ms: r.final.b2 },
-        stats: {
-          ...statsByKey.get(`${location_id}:1`),
-          r2: r.final.r2,
-          adj_r2: r.final.adjR2,
-          n: r.final.n,
-          rmse: r.final.rmse,
-          period_start: r.firstDate,
-          period_end: r.lastDate,
-          source: 'nafas-pm25 x era5-weather 2022-2023',
-          specification: 'lagged_pm25 + same_day_wind',
-        },
+        version: COEFFICIENT_VERSION,
+        intercept: Number(r.final.intercept.toFixed(6)),
+        coef: buildCoef(r),
+        stats: mergeStats(statsByKey.get(`${location_id}:${COEFFICIENT_VERSION}`), buildStats(r)),
         is_active: true,
       };
       const { error: upsertError } = await db
@@ -564,7 +648,25 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exitCode = 1;
-});
+/**
+ * Run the fit only when this file IS the command, not when it is imported.
+ *
+ * `mergeStats` is exported for tests/calibrate-stats.test.ts, and a bare
+ * `main()` at module scope made importing it run the whole calibration as a
+ * side effect: reading the Nafas archive, pulling ERA5, printing the report.
+ * Locally that merely made `npm test` do a hidden refit. In CI it is worse --
+ * `data/historical/` is gitignored and therefore absent, so main() throws,
+ * this catch sets `process.exitCode = 1`, and vitest exits non-zero with every
+ * test passing. Whether it lands before vitest finishes is a race, which is
+ * the nastiest version of that bug: a green suite that fails intermittently
+ * for a reason nothing in the test output mentions.
+ */
+const isEntrypoint =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntrypoint) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  });
+}

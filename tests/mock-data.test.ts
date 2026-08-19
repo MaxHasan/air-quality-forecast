@@ -29,7 +29,12 @@ describe('mock data seam', () => {
   const CALIBRATED = LOCATIONS.filter((l) => l.calibratedAtLaunch).map((l) => l.slug);
 
   it('gives every calibrated-at-launch location a wind_regression model and no calibrating banner', async () => {
-    expect(CALIBRATED).toHaveLength(6); // all of Jabodetabek
+    // Guards against the filter silently matching nothing. Deliberately not
+    // pinned to 6: `jakarta-east` arrives the day Jakarta Timur gets a feed
+    // (0007's KNOWN GAPS), and bogor/depok/tangerang already have archives
+    // waiting for a location. Growth should extend this test's reach, not
+    // break it.
+    expect(CALIBRATED.length).toBeGreaterThan(0);
     for (const slug of CALIBRATED) {
       const f = await getLocationForecast(slug);
       expect(f, slug).not.toBeNull();

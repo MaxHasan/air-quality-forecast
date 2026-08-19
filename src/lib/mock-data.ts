@@ -25,7 +25,7 @@
  */
 
 import { toLocalHour, toLocalHourLabel, todayLocalDate, tomorrowLocalDate, addLocalDays } from './format';
-import { LOCATIONS, locationBySlug, MIN_SCORED_DAYS_FOR_RANKING } from './stations';
+import { ALL_STATIONS, LOCATIONS, locationBySlug, MIN_SCORED_DAYS_FOR_RANKING } from './stations';
 import { pickHeadlineModel, isCalibrating } from './headline';
 import { MODEL_FALLBACK_ORDER } from './types';
 import type {
@@ -153,13 +153,47 @@ interface LocationProfile {
   recentGapHours: number;
   /** Most recent N daily actuals forced to null — same outage, daily view. */
   recentGapDays: number;
-  /** Ground-truth station count feeding the daily rollup on a normal day. */
-  stationCount: number;
   /** Distinct local hours behind a normal day's rollup (out of 24). Below
    * MIN_HOURS_FOR_SCORING (12) marks a location as thin/degraded, not missing. */
   typicalHoursCount: number;
 }
 
+/**
+ * Stations feeding a location's rollup on a normal day.
+ *
+ * Read off the registry rather than restated per profile. The hand-written
+ * copy had drifted: it still said 2 for jakarta-central and 1 for bsd, counts
+ * that were correct until 0006 seeded AirGradient and took both to 4. A
+ * derived value cannot fall behind the next migration the way that one did.
+ */
+function stationCountFor(slug: LocationSlug): number {
+  return ALL_STATIONS.filter((st) => st.locationSlug === slug).length;
+}
+
+/**
+ * Per-location generator settings.
+ *
+ * The Jabodetabek levels and wind slopes are not invented. `pm25Base` follows
+ * the 2022-2023 Nafas archive's per-city mean, rescaled onto this fixture's
+ * (higher) working level with jakarta-central pinned at 58 -- so the ordering
+ * the mock shows is the ordering the data actually has:
+ *
+ *   central 34.8 < north 35.5 < south 36.6 < west 37.8 < bekasi 43.0 < bsd 46.0
+ *
+ * and `windSlope` tracks each location's fitted `wind_speed_avg_ms`
+ * coefficient on the same kind of rescale (central pinned at 4.4):
+ *
+ *   north -5.41 < central -5.64 < west -6.26 < bekasi -6.38 < south -6.98 < bsd -8.29
+ *
+ * That second gradient is the interesting one and it is why decomposing
+ * Jakarta was worth doing: the dense core is the LEAST wind-responsive part of
+ * the metropolis, and the outer south and the satellites the most. A single
+ * Jakarta card averaged that away.
+ *
+ * bsd's two numbers moved here (52 -> 77, 4.1 -> 6.5). They predated the
+ * archive being read per city and had BSD as cleaner and less wind-sensitive
+ * than central, which is backwards on both counts.
+ */
 const PROFILES: Readonly<Record<LocationSlug, LocationProfile>> = {
   'jakarta-central': {
     pm25Base: 58,
@@ -179,13 +213,39 @@ const PROFILES: Readonly<Record<LocationSlug, LocationProfile>> = {
     dropoutRate: 0.02,
     recentGapHours: 0,
     recentGapDays: 0,
-    stationCount: 2,
     typicalHoursCount: 24,
   },
+  'jakarta-north': {
+    ...jabodetabekProfile(59, 4.2),
+    // Coastal strip: the sea breeze is stronger and steadier than inland.
+    windBase: 2.9,
+    windDiurnalAmp: 1.6,
+    // One KLHK feed and nothing else. If it drops, the location goes dark.
+    dropoutRate: 0.08,
+  },
+  'jakarta-south': {
+    ...jabodetabekProfile(61, 5.4),
+    trafficMorningAmp: 10,
+    trafficEveningAmp: 12,
+  },
+  'jakarta-west': {
+    ...jabodetabekProfile(63, 4.9),
+    // Single Nafas unit, same exposure as jakarta-north.
+    dropoutRate: 0.08,
+  },
+  bekasi: {
+    ...jabodetabekProfile(72, 5.0),
+    // Industrial airshed: a higher floor and a flatter traffic signature than
+    // the residential regions, because the sources run around the clock.
+    trafficMorningAmp: 6,
+    trafficEveningAmp: 7,
+    pm25NoiseSdHourly: 6.5,
+    dropoutRate: 0.08,
+  },
   bsd: {
-    pm25Base: 52,
+    pm25Base: 77,
     windBase: 2.8,
-    windSlope: 4.1,
+    windSlope: 6.5,
     windDiurnalAmp: 1.3,
     windRegimeAmp: 0.9,
     windNoiseSdHourly: 0.5,
@@ -200,7 +260,6 @@ const PROFILES: Readonly<Record<LocationSlug, LocationProfile>> = {
     dropoutRate: 0.02,
     recentGapHours: 0,
     recentGapDays: 0,
-    stationCount: 1,
     typicalHoursCount: 24,
   },
   'bali-denpasar': {
@@ -221,7 +280,6 @@ const PROFILES: Readonly<Record<LocationSlug, LocationProfile>> = {
     dropoutRate: 0.12, // single-station location — the weakest link in the map
     recentGapHours: 0,
     recentGapDays: 0,
-    stationCount: 1,
     typicalHoursCount: 8, // thin: below MIN_HOURS_FOR_SCORING, degraded but present
   },
   'sg-central': sgProfile(24),
@@ -230,6 +288,35 @@ const PROFILES: Readonly<Record<LocationSlug, LocationProfile>> = {
   'sg-east': sgProfile(23),
   'sg-west': { ...sgProfile(26), dropoutRate: 0.05, recentGapHours: 14, recentGapDays: 2 },
 } as const;
+
+/**
+ * Shared shape for the Jabodetabek locations added by the Jakarta
+ * decomposition, the way `sgProfile` serves the five NEA regions. Only the
+ * level and the wind slope differ by default; anything else a region needs is
+ * spread over the top at the call site.
+ */
+function jabodetabekProfile(pm25Base: number, windSlope: number): LocationProfile {
+  return {
+    pm25Base,
+    windBase: 2.7,
+    windSlope,
+    windDiurnalAmp: 1.4,
+    windRegimeAmp: 1.0,
+    windNoiseSdHourly: 0.5,
+    windNoiseSdDaily: 0.4,
+    pm25NoiseSdHourly: 5,
+    pm25NoiseSdDaily: 4.5,
+    trafficMorningAmp: 9,
+    trafficEveningAmp: 11,
+    camsBias: 6,
+    camsNoiseSd: 6,
+    windRegNoiseSd: 2.6,
+    dropoutRate: 0.02,
+    recentGapHours: 0,
+    recentGapDays: 0,
+    typicalHoursCount: 24,
+  };
+}
 
 function sgProfile(pm25Base: number): LocationProfile {
   return {
@@ -250,7 +337,6 @@ function sgProfile(pm25Base: number): LocationProfile {
     dropoutRate: 0.03,
     recentGapHours: 0,
     recentGapDays: 0,
-    stationCount: 1,
     typicalHoursCount: 24,
   };
 }
@@ -416,7 +502,7 @@ function buildDailySeries(slug: LocationSlug): DailySeries {
           pm25_min: round1(todayPoint.actual_pm25 * 0.7),
           pm25_max: round1(todayPoint.actual_pm25 * 1.35),
           hours_count: p.recentGapHours > 0 ? Math.max(0, 24 - p.recentGapHours) : p.typicalHoursCount,
-          station_count: p.stationCount,
+          station_count: stationCountFor(slug),
           computed_at: ANCHOR_NOW.toISOString(),
         }
       : null;
@@ -461,6 +547,16 @@ const ACCURACY_TIER: Readonly<Record<ModelName, { baseMae: number; growth: numbe
 /** Scored-day counts per location — the thing that gates whether MAE is trustworthy. */
 const SCORED_DAYS: Readonly<Record<LocationSlug, number>> = {
   'jakarta-central': 28,
+  // The four locations added by the Jakarta decomposition start from zero
+  // history: their stations were seeded in 0007, so however good their fitted
+  // coefficients are, they have only just begun being scored. Deliberately
+  // below MIN_SCORED_DAYS_FOR_RANKING so the fixture exercises the
+  // "calibrated but not yet ranked" state — a real combination the UI has to
+  // handle and which no location previously showed.
+  'jakarta-north': 5,
+  'jakarta-south': 6,
+  'jakarta-west': 4,
+  bekasi: 3,
   bsd: 24,
   'bali-denpasar': 4,
   'sg-central': 5,
@@ -648,7 +744,17 @@ export async function getLocationForecast(slug: LocationSlug): Promise<LocationF
     models,
     latest_actual: latestActual,
     today_prediction: buildTodayPrediction(slug),
-    calibrating: isCalibrating(models),
+    // Same two-part rule as queries.ts, and for the same reason. The scored-days
+    // test alone used to be enough here because every fixture location either
+    // had a fitted wind model AND plenty of scored days, or neither. The Jakarta
+    // decomposition breaks that pairing: jakarta-north/south/west and bekasi
+    // ship with fitted coefficients but only a handful of scored days each,
+    // because their stations were seeded in 0007. On the scored-days test alone
+    // they would render "no wind model fitted yet" directly above a wind-model
+    // number — which is the exact contradiction queries.ts added
+    // `!hasHouseModel` to prevent. The seam has to agree with the thing it
+    // stands in for, or the fixture stops being a preview of production.
+    calibrating: isCalibrating(models) && !models.some((m) => m.model === 'wind_regression'),
   };
 }
 

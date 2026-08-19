@@ -45,10 +45,20 @@
  * ---------------------------------------------------------------------------
  * Cold start
  * ---------------------------------------------------------------------------
- * Only Jakarta and BSD have the 2022-2023 archive to fit on. Bali and the five
- * Singapore regions have no active coefficients, so `wind_regression` writes
- * nothing for them and the UI shows "calibrating" — an honest absence rather
- * than a fabricated third opinion.
+ * All six Jabodetabek locations — the four Jakarta regions, BSD and Bekasi —
+ * have a 2022-2023 Nafas archive to fit on, one CSV per city, so all six carry
+ * active coefficients. Bali and the five Singapore regions have none, so
+ * `wind_regression` writes nothing for them and the UI shows "calibrating" —
+ * an honest absence rather than a fabricated third opinion.
+ *
+ * Note the two cold starts are different and only one is visible. Bali and
+ * Singapore lack a MODEL. The locations added by 0007 have a model but lack
+ * SCORED HISTORY: `model_accuracy` has nothing for them until predictions
+ * written from today are scored against actuals, so for the first
+ * MIN_SCORED_DAYS_FOR_RANKING days their three models are all unranked and the
+ * headline falls back to MODEL_FALLBACK_ORDER rather than to a measured
+ * winner. Their predictions are real from day one; the claim that one model is
+ * beating the others is not, and the UI withholds it.
  */
 
 import { addLocalDays, localDayUtcRange, todayLocalDate } from '../src/lib/format';

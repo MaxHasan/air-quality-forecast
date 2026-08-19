@@ -26,9 +26,11 @@ export interface LocationConfig {
   /** Default card order on the home page. */
   order: number;
   /**
-   * Whether a wind-regression fit is expected at launch. Only Jakarta has the
-   * 2022–2023 Nafas × BMKG history to fit on; the rest start on CAMS +
-   * persistence and are labelled "calibrating" until they accumulate ~90 days.
+   * Whether a wind-regression fit is expected at launch. Every Jabodetabek
+   * location has 2022–2023 Nafas history to fit on — one CSV per DKI city
+   * plus the satellites — so all six carry seeded coefficients. Bali and the
+   * five Singapore regions start on CAMS + persistence and are labelled
+   * "calibrating" until they accumulate ~90 days.
    */
   calibratedAtLaunch: boolean;
 }
@@ -37,16 +39,55 @@ export interface LocationConfig {
 export const LOCATIONS: readonly LocationConfig[] = [
   {
     slug: 'jakarta-central',
-    name: 'Jakarta (Central)',
-    shortName: 'Jakarta',
+    name: 'Jakarta Central',
+    shortName: 'Jkt Central',
     country: 'ID',
-    timezone: 'Asia/Jakarta',
+    // UNCHANGED from the pre-decomposition anchor. This point is baked into the
+    // ERA5 pull behind the fitted coefficients; moving it would silently refit
+    // the model against a different column of weather.
     lat: -6.1862,
     lon: 106.834,
+    timezone: 'Asia/Jakarta',
     order: 1,
     calibratedAtLaunch: true,
   },
   {
+    slug: 'jakarta-north',
+    name: 'Jakarta North',
+    shortName: 'Jkt North',
+    country: 'ID',
+    timezone: 'Asia/Jakarta',
+    // Centroid of Jakarta Utara, the coastal strip. Its one feed (KBN Marunda)
+    // sits at the eastern end, ~7 km away.
+    lat: -6.1214,
+    lon: 106.8827,
+    order: 2,
+    calibratedAtLaunch: true,
+  },
+  {
+    slug: 'jakarta-south',
+    name: 'Jakarta South',
+    shortName: 'Jkt South',
+    country: 'ID',
+    timezone: 'Asia/Jakarta',
+    lat: -6.2615,
+    lon: 106.8106,
+    order: 3,
+    calibratedAtLaunch: true,
+  },
+  {
+    slug: 'jakarta-west',
+    name: 'Jakarta West',
+    shortName: 'Jkt West',
+    country: 'ID',
+    timezone: 'Asia/Jakarta',
+    lat: -6.1683,
+    lon: 106.7588,
+    order: 4,
+    calibratedAtLaunch: true,
+  },
+  {
+    // South Tangerang, the western satellite. Banten province, not DKI.
     slug: 'bsd',
     name: 'BSD City',
     shortName: 'BSD',
@@ -54,7 +95,22 @@ export const LOCATIONS: readonly LocationConfig[] = [
     timezone: 'Asia/Jakarta',
     lat: -6.3019,
     lon: 106.6528,
-    order: 2,
+    order: 5,
+    calibratedAtLaunch: true,
+  },
+  {
+    // Kota Bekasi, the eastern satellite — BSD's counterpart on the other side
+    // of the metropolis, and the closest thing to an east-side reading there is.
+    // It is NOT a stand-in for Jakarta Timur, which has no feed at all; it is
+    // labelled Bekasi because that is what the sensor measures.
+    slug: 'bekasi',
+    name: 'Bekasi',
+    shortName: 'Bekasi',
+    country: 'ID',
+    timezone: 'Asia/Jakarta',
+    lat: -6.2383,
+    lon: 106.9756,
+    order: 6,
     calibratedAtLaunch: true,
   },
   {
@@ -66,7 +122,7 @@ export const LOCATIONS: readonly LocationConfig[] = [
     timezone: 'Asia/Makassar',
     lat: -8.65,
     lon: 115.2167,
-    order: 3,
+    order: 7,
     calibratedAtLaunch: false,
   },
   {
@@ -77,7 +133,7 @@ export const LOCATIONS: readonly LocationConfig[] = [
     timezone: 'Asia/Singapore',
     lat: 1.35735,
     lon: 103.82,
-    order: 4,
+    order: 8,
     calibratedAtLaunch: false,
   },
   {
@@ -88,7 +144,7 @@ export const LOCATIONS: readonly LocationConfig[] = [
     timezone: 'Asia/Singapore',
     lat: 1.41803,
     lon: 103.82,
-    order: 5,
+    order: 9,
     calibratedAtLaunch: false,
   },
   {
@@ -99,7 +155,7 @@ export const LOCATIONS: readonly LocationConfig[] = [
     timezone: 'Asia/Singapore',
     lat: 1.29587,
     lon: 103.82,
-    order: 6,
+    order: 10,
     calibratedAtLaunch: false,
   },
   {
@@ -110,7 +166,7 @@ export const LOCATIONS: readonly LocationConfig[] = [
     timezone: 'Asia/Singapore',
     lat: 1.35735,
     lon: 103.94,
-    order: 7,
+    order: 11,
     calibratedAtLaunch: false,
   },
   {
@@ -121,7 +177,7 @@ export const LOCATIONS: readonly LocationConfig[] = [
     timezone: 'Asia/Singapore',
     lat: 1.35735,
     lon: 103.7,
-    order: 8,
+    order: 12,
     calibratedAtLaunch: false,
   },
 ] as const;
@@ -176,7 +232,16 @@ export interface StationConfig {
  *
  * 2. **Bali has exactly one station in range** — Badung Sempidi, ~6 km
  *    north-west of central Denpasar. There is no redundancy: if it goes dormant,
- *    Bali falls back to CAMS alone. This is the weakest link in the map.
+ *    Bali falls back to CAMS alone. (AirGradient later fixed this; see below.)
+ *
+ * Re-swept 2026-08-19 for the Jakarta decomposition (0007). The Jabodetabek box
+ * still returns 14 stations, and two of the nine that 0004 listed as "found but
+ * not seeded" now have a location to attach to: `-531679` KBN Marunda becomes
+ * Jakarta North's only feed, and `-416815` Bekasi Kayuringin becomes Bekasi's.
+ * The same sweep is what establishes that **Jakarta Timur has no feed at all**
+ * — not in WAQI, not on the AirGradient map — which is why there is no
+ * `jakarta-east` location. Bekasi is the nearest eastern reading and is named
+ * Bekasi, because that is the city it is in.
  *
  * The silver lining is @8294: Kemayoran is the *same* BMKG station whose 2022–23
  * weather the wind model is calibrated on, so Jakarta's ground truth and its
@@ -195,7 +260,12 @@ export const WAQI_STATIONS: readonly StationConfig[] = [
     network: 'bmkg',
   },
   {
-    // Second Jakarta feed so the location survives one station going quiet.
+    // Second Central feed so the location survives one station going quiet.
+    // GBK sits in Gelora, Tanah Abang — Jakarta Pusat administratively, though
+    // right on the Selatan border. Distance nearly ties (4.7 km from Central's
+    // anchor, 5.2 km from South's), so the administrative boundary decides it,
+    // and it keeps jakarta-central's station mix identical to what its fitted
+    // coefficients were scored against.
     locationSlug: 'jakarta-central',
     source: 'waqi',
     sourceStationId: '-416842',
@@ -203,10 +273,28 @@ export const WAQI_STATIONS: readonly StationConfig[] = [
     network: 'klhk',
   },
   {
+    // Jakarta Utara's only feed, in either network. Verified live 2026-08-19:
+    // fresh iaqi.pm25, attributed to KLHK. If it goes quiet, Jakarta North has
+    // nothing — the same single-point-of-failure Bali used to have.
+    locationSlug: 'jakarta-north',
+    source: 'waqi',
+    sourceStationId: '-531679',
+    name: 'KBN Marunda, North Jakarta',
+    network: 'klhk',
+  },
+  {
     locationSlug: 'bsd',
     source: 'waqi',
     sourceStationId: '-416785',
     name: 'Tangerang Selatan, Serpong',
+    network: 'klhk',
+  },
+  {
+    // Kota Bekasi's only feed. The eastern satellite's whole ground truth.
+    locationSlug: 'bekasi',
+    source: 'waqi',
+    sourceStationId: '-416815',
+    name: 'Bekasi Kayuringin',
     network: 'klhk',
   },
   {
@@ -240,10 +328,21 @@ export const DATAGOVSG_STATIONS: readonly StationConfig[] = [
  * (waqi 8294): the standing co-location pair for `npm run verify:colocation`.
  * Bali goes from one station (WAQI Sempidi) to four here, which is the end of
  * its single point of failure.
+ *
+ * Re-verified 2026-08-19 for 0007. All eight rows below still report, and the
+ * three stations 0006 found but could not place — it recorded them as "live
+ * but seeded nowhere, because no location covers them" — now have one:
+ * 84701 Kedoya Utara becomes Jakarta West's only feed, and 175134 Permata Hijau
+ * plus 77248 Pakubuwono 3 give Jakarta South a pair. Coordinates below are
+ * copied verbatim from the world payload, per 0006's warning about hand-typed
+ * ones being 0.9–2.3 km wrong.
  */
 export const AIRGRADIENT_STATIONS: readonly StationConfig[] = [
   { locationSlug: 'jakarta-central', source: 'airgradient', sourceStationId: '84702', name: 'The Pakubuwono Menteng', network: null },
   { locationSlug: 'jakarta-central', source: 'airgradient', sourceStationId: '199980', name: 'BMKG 1 (co-located with Kemayoran BAM)', network: null },
+  { locationSlug: 'jakarta-west', source: 'airgradient', sourceStationId: '84701', name: 'Kedoya Utara, Kebon Jeruk', network: 'nafas' },
+  { locationSlug: 'jakarta-south', source: 'airgradient', sourceStationId: '175134', name: 'Permata Hijau, Kebayoran Lama', network: 'nafas' },
+  { locationSlug: 'jakarta-south', source: 'airgradient', sourceStationId: '77248', name: 'Pakubuwono 3, Kebayoran Baru', network: 'nafas' },
   { locationSlug: 'bsd', source: 'airgradient', sourceStationId: '156518', name: 'British School Jakarta, Pondok Aren', network: 'nafas' },
   { locationSlug: 'bsd', source: 'airgradient', sourceStationId: '156523', name: 'Global Jaya School, Parigi', network: 'nafas' },
   { locationSlug: 'bsd', source: 'airgradient', sourceStationId: '74891', name: 'Ciputat', network: 'nafas' },

@@ -120,7 +120,7 @@ describe('parseAirGradientWorld', () => {
     ...over,
   });
 
-  it('extracts wanted stations, corrects them, and floors timestamps to the hour', () => {
+  it('keeps the true measurement instant rather than flooring it to the hour', () => {
     const result = parseAirGradientWorld([liveRow(), liveRow({ locationId: 77247, pm02: 37.2, rhum: 60 })], OPTS);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -128,13 +128,32 @@ describe('parseAirGradientWorld', () => {
 
     const bmkg = result.readings.find((r) => r.locationId === '199980')!;
     expect(bmkg.pm25Corrected).toBeCloseTo(correctAirGradientPm25(52, 75)!, 5);
-    expect(bmkg.observedAt).toBe('2026-08-18T12:00:00.000Z'); // floored, not 12:25:30
+    // This is an instantaneous sample. Flooring it to 12:00 would assert it
+    // described the whole hour, which is the claim that is false — and would
+    // also collide with the other samples taken that hour, so only one of four
+    // would survive the (station_id, observed_at) upsert.
+    expect(bmkg.observedAt).toBe('2026-08-18T12:25:30.000Z');
+
     // Provenance: raw value, RH and the formula id all survive into `raw`.
     const raw = bmkg.raw as { pm02_raw: number; rhum: number; correction: string; measured_at: string };
     expect(raw.pm02_raw).toBe(52);
     expect(raw.rhum).toBe(75);
     expect(raw.correction).toBe(CORRECTION_ID);
     expect(raw.measured_at).toBe('2026-08-18T12:25:30.000Z');
+  });
+
+  it('gives four samples in one hour four distinct keys, so none overwrites another', () => {
+    // The property that makes sub-hourly polling worth doing: each poll lands
+    // on its own row, and aggregateDailyAq averages them into an hourly mean.
+    const minutes = ['12:07:11', '12:22:04', '12:37:52', '12:52:30'];
+    const result = parseAirGradientWorld(
+      minutes.map((m) => liveRow({ timestamp: `2026-08-18T${m}.000Z` })),
+      OPTS,
+    );
+    if (!result.ok) throw new Error('expected ok');
+    const keys = new Set(result.readings.map((r) => r.observedAt));
+    expect(result.readings).toHaveLength(4);
+    expect(keys.size).toBe(4);
   });
 
   it('ignores the other ~2,700 unwanted rows', () => {

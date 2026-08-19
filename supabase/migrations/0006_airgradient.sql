@@ -173,3 +173,53 @@ from public.locations l
 where l.id = mc.location_id
   and mc.is_active
   and l.slug in ('jakarta-central', 'bsd');
+
+-- ---------------------------------------------------------------------------
+-- Admit the sub-hourly AirGradient poll as its own job name.
+--
+-- `ingestion_runs.job` carries a CHECK, so a new job name is a schema change
+-- and not merely a TypeScript union member. Without this, every run of the
+-- ingest-airgradient workflow fails to open its run row (run-log.ts degrades to
+-- "detached" and still ingests, so the symptom is missing audit rows and a
+-- footer that never sees the job -- not lost data).
+--
+-- Why a distinct name rather than reusing 'ingest-aq': the PWA footer scopes its
+-- failure streak to the most recent job's own history, expressly so a healthy
+-- job cannot mask a failing one. The AirGradient poll runs four times an hour
+-- and is therefore nearly always the most recent run; sharing the name would let
+-- its successes reset the streak and hide a WAQI outage behind a green footer.
+--
+-- Matched structurally through pg_attribute, exactly as the stations constraint
+-- above -- and for the same reason, which nearly bit twice. 0001 wrote
+--     check (job in ('ingest-aq', ...))
+-- and Postgres stored it as
+--     CHECK ((job = ANY (ARRAY['ingest-aq'::text, ...])))
+-- An earlier draft of this block hunted for `%job%in%`. That pattern happens to
+-- match the stored text, but only by accident: the "in" it finds is the one
+-- inside the literal 'ingest-aq'. Rename the jobs and the match evaporates, the
+-- drop silently does nothing, and the ADD below collides with the surviving
+-- name. Matching on conkey/attname depends on the catalogue instead of on
+-- coincidences of spelling.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  con record;
+begin
+  for con in
+    select c.conname
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid
+     and a.attnum = any (c.conkey)
+    where c.conrelid = 'public.ingestion_runs'::regclass
+      and c.contype = 'c'
+      and a.attname = 'job'
+  loop
+    execute format('alter table public.ingestion_runs drop constraint %I', con.conname);
+  end loop;
+end $$;
+
+alter table public.ingestion_runs
+  add constraint ingestion_runs_job_check
+  check (job in ('ingest-aq', 'ingest-airgradient', 'ingest-weather', 'rollup',
+                 'predict', 'backfill', 'retention', 'calibrate', 'keepalive'));

@@ -42,12 +42,13 @@
  * permanent phantom step into every daily average that crosses it.
  *
  * The correction narrows the gap; it does not close it. `pm25_ugm3` gets the
- * corrected value, and `raw` retains {pm02, rhum, formula id} — the inputs a
- * re-derivation would need if the formula is ever revised. Note that no such
- * re-derivation script exists yet: the inputs are preserved so one *can* be
- * written, not because one is waiting. Until it is, a formula change leaves
- * stored history on the old basis. `npm run verify:colocation` measures the
- * residual against the Kemayoran BAM on demand.
+ * corrected value, and `raw` retains {pm02, rhum, formula id} — the inputs
+ * `npm run rederive:airgradient` needs to recompute stored history if the
+ * formula is ever revised. That reach is bounded: retention.ts nulls `raw`
+ * after 30 days, so anything older can never be re-derived. Raise --raw-days
+ * BEFORE payloads age out if a deeper revision is ever expected; it cannot be
+ * undone afterwards. `npm run verify:colocation` measures the residual against
+ * the Kemayoran BAM on demand.
  *
  * A reading without RH is dropped rather than half-corrected: applying the
  * slope without the RH term biases high by construction, and a silently
@@ -56,7 +57,6 @@
  */
 
 import type { Json } from '../../src/lib/types';
-import { floorToHourUtc } from './waqi';
 
 export const AIRGRADIENT_WORLD_URL =
   'https://api.airgradient.com/public/api/v1/world/locations/measures/current';
@@ -252,10 +252,19 @@ export function parseAirGradientWorld(payload: unknown, options: AirGradientPars
     readings.push({
       locationId: id,
       pm25Corrected: corrected,
-      // Floored to the hour for idempotency: two runs in the same hour revise
-      // one row instead of stacking near-duplicate minutes. The exact
-      // measurement instant is preserved in `raw`.
-      observedAt: floorToHourUtc(measuredAt).toISOString(),
+      // The TRUE measurement instant, not floored to the hour.
+      //
+      // This reading is an instantaneous sample, not an hourly average, and
+      // flooring it would assert the opposite — filing one moment under a whole
+      // clock hour as though it described all sixty minutes. Keeping the
+      // instant lets several samples per hour coexist under the
+      // `(station_id, observed_at)` key, and `aggregateDailyAq` averages them
+      // within the station-hour into a real hourly mean.
+      //
+      // Idempotency survives: the sensor's own timestamp is the key, so
+      // re-fetching the same reading rewrites the same row rather than stacking
+      // a duplicate.
+      observedAt: measuredAt.toISOString(),
       raw: {
         source: 'airgradient',
         location_id: id,

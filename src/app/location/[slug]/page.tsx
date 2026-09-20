@@ -85,6 +85,13 @@ export default async function LocationPage({ params }: PageProps) {
           {forecast.latest_actual
             ? `Today so far: ${formatPm25(forecast.latest_actual.pm25_avg)} µg/m³ over ${forecast.latest_actual.hours_count}h from ${forecast.latest_actual.station_count} station${forecast.latest_actual.station_count === 1 ? '' : 's'}.`
             : 'No recent ground-truth reading for today — the station feed is behind. See the footer for ingestion status.'}
+          {/* Forecast-versus-reality, eyeballed daily: what the model called for
+              today, next to what actually happened above. See the field comment
+              on `today_prediction` in src/lib/types.ts for why this matters long
+              before /models has enough scored days to say it formally. */}
+          {forecast.latest_actual && forecast.today_prediction && (
+            <> Called at {formatPm25(forecast.today_prediction.predicted_pm25)} µg/m³.</>
+          )}
         </p>
       </header>
 

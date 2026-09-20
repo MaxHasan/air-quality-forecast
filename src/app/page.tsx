@@ -17,8 +17,7 @@ export default async function HomePage() {
       <header className="flex flex-col gap-2">
         <h1 className="text-2xl font-bold sm:text-3xl">Air Quality Forecast</h1>
         <p className="max-w-2xl text-sm text-muted">
-          Tomorrow&apos;s PM2.5 for Jabodetabek, Bali and Singapore, with a verdict for the run, the swim, and the
-          stroller walk — built so you can decide tonight, not scramble in the morning.
+          Is tomorrow safe for the run, the swim, and the stroller walk — across Jabodetabek, Bali and Singapore?
         </p>
       </header>
 

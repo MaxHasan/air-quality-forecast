@@ -1,8 +1,16 @@
-import type { HorizonDays, LocationSlug, ModelAccuracyRow, ModelName } from '@/lib/types';
+import { MODEL_FALLBACK_ORDER, type HorizonDays, type LocationSlug, type ModelAccuracyRow, type ModelName } from '@/lib/types';
 import { LOCATIONS, MIN_SCORED_DAYS_FOR_RANKING } from '@/lib/stations';
 import { MODEL_LABELS, formatHorizon, formatMetric, scoredDaysRemaining } from '@/lib/display';
 
-const MODEL_COLUMNS: readonly ModelName[] = ['wind_regression', 'cams', 'persistence'];
+/**
+ * NOT compiler-enforced — a plain array, not a `Record<ModelName, …>`.
+ *
+ * Omit a model here and its column simply vanishes from /models with no type
+ * error and no test failure. Derived from MODEL_FALLBACK_ORDER so a fifth
+ * model cannot be forgotten the way a fourth nearly was; that constant is also
+ * the render order everywhere else, which is the order this table wants.
+ */
+const MODEL_COLUMNS: readonly ModelName[] = MODEL_FALLBACK_ORDER;
 const HORIZONS: readonly HorizonDays[] = [1, 2, 3];
 
 interface AccuracyTableProps {

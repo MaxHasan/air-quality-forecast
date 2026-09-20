@@ -62,9 +62,9 @@ export default async function LocationPage({ params }: PageProps) {
 
         {forecast.calibrating && (
           <p className="rounded-lg border border-surface-border bg-surface-muted px-4 py-3 text-sm text-muted">
-            Still calibrating: there isn&apos;t a fitted wind model here yet, so the headline call blends the CAMS
-            forecast and today&apos;s persistence baseline. A wind-speed regression joins once ~90 days of ground
-            truth accumulate.
+            Still calibrating: there isn&apos;t a fitted wind model here yet, so the headline call comes from the
+            CAMS forecast and the two naive baselines — the last complete day, and a rolling average of recent
+            complete days. A wind-speed regression joins once ~90 days of ground truth accumulate.
           </p>
         )}
 

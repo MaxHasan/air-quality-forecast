@@ -1,15 +1,16 @@
 /**
- * predict.ts — the three-model hybrid engine.
+ * predict.ts — the four-model hybrid engine.
  *
  * Run:
  *   npm run predict                 # every location, horizons 1-3
  *   npm run predict -- --dry-run    # compute and print, write nothing
  *
  * Runs once a day at 12:37 UTC = 19:37 WIB (predict-score.yml), after the
- * rollup has landed today's partial actual.
+ * rollup has landed today's partial actual — which this script reads, records,
+ * and deliberately does not use. See "The day in progress" below.
  *
  * ---------------------------------------------------------------------------
- * Why three models and not one
+ * Why four models and not one
  * ---------------------------------------------------------------------------
  * Every model writes a row for every location and horizon, every day, and
  * `model_accuracy` (0002_views.sql) ranks them on rolling 30-day MAE. The app
@@ -17,16 +18,58 @@
  * rather than whichever seemed best during calibration. That matters because
  * the backtest in scripts/calibrate/fit-wind-model.ts found the ranking
  * inverts with horizon: naive persistence wins a day out, the wind regression
- * takes over further ahead. Crowning one model here would throw that away.
+ * takes over further ahead. Crowning one model here would throw that away —
+ * and the 2026-09 backtest is a second argument for the same discipline, since
+ * the model it found strongest is the one with no coefficients at all.
  *
- *   persistence      the last observed daily mean, carried forward. The
- *                    benchmark; daily PM2.5 is strongly autocorrelated, which
- *                    makes it much harder to beat than it looks.
+ *   persistence      the last COMPLETE daily mean, carried forward. The naive
+ *                    benchmark, deliberately unimproved; daily PM2.5 is
+ *                    strongly autocorrelated, which makes it much harder to
+ *                    beat than it looks.
+ *   rolling_mean     the mean of complete daily means over the trailing
+ *                    ROLLING_MEAN_WINDOW_DAYS calendar days. Also carried
+ *                    forward unchanged across horizons. No coefficients, which
+ *                    is what lets it run for Bali and Singapore too.
  *   cams             Open-Meteo's CAMS PM2.5 forecast, aggregated to the target
  *                    local date. Physics, on a 40 km grid — coarse for a city.
- *   wind_regression  intercept + b_lag·(last observed daily mean)
+ *   wind_regression  intercept + b_lag·(rolling mean of complete days)
  *                              + b_wind·(forecast daily-mean wind for the target)
  *                    The house model. Skipped where no coefficients are active.
+ *
+ * ---------------------------------------------------------------------------
+ * The day in progress is never an input
+ * ---------------------------------------------------------------------------
+ * This is the correction shipped in 2026-09, and it is worth stating loudly
+ * because the bug was invisible and ran nightly for months.
+ *
+ * The rollup writes TODAY's partial daily mean into `daily_aq` minutes before
+ * this script runs. `readAnchor` used to scan newest-first for the first row
+ * with `hours_count >= 12` — which from about midday WIB onward is always that
+ * partial. So `persistence` was "today so far", and the regression's `pm25_lag`
+ * was fed a ~19-hour mean while `b_lag` had been fitted on complete 24-hour
+ * days. Train on the same source you will predict with; this project had
+ * already learned that once, from BMKG-vs-Open-Meteo wind.
+ *
+ * Both anchors now come from `selectAnchors` (src/lib/rolling.ts), which the
+ * calibration script also calls — one definition, two callers. Today's partial
+ * is still READ, and recorded in `inputs.partial_today_pm25`, precisely so that
+ * "this run saw a 19-hour mean and did not use it" is a fact in the data.
+ *
+ * ---------------------------------------------------------------------------
+ * The lag window comes from the coefficient row, not from this file
+ * ---------------------------------------------------------------------------
+ * `b_lag` is only correct for the lag definition it was fitted on, so the
+ * definition travels with the coefficients in `stats.lag_window_days`. If a row
+ * asks for `pm25_lag` without declaring a window it is v1-shaped, and this
+ * script SKIPS the model with the reason recorded rather than guessing — the
+ * same discipline `applyCoefficients` applies to an unknown predictor name.
+ *
+ * That refusal is also what makes the migration ordering safe: 0009 applied
+ * late means v1 rows are simply refused for a while, and the other three models
+ * carry the night.
+ *
+ * `rolling_mean`'s window is resolved separately, from
+ * ROLLING_MEAN_WINDOW_DAYS, because it has no coefficient row to read.
  *
  * ---------------------------------------------------------------------------
  * Coefficients are read BY NAME
@@ -49,26 +92,35 @@
  * have a 2022-2023 Nafas archive to fit on, one CSV per city, so all six carry
  * active coefficients. Bali and the five Singapore regions have none, so
  * `wind_regression` writes nothing for them and the UI shows "calibrating" —
- * an honest absence rather than a fabricated third opinion.
+ * an honest absence rather than a fabricated opinion.
  *
  * Note the two cold starts are different and only one is visible. Bali and
  * Singapore lack a MODEL. The locations added by 0007 have a model but lack
  * SCORED HISTORY: `model_accuracy` has nothing for them until predictions
  * written from today are scored against actuals, so for the first
- * MIN_SCORED_DAYS_FOR_RANKING days their three models are all unranked and the
+ * MIN_SCORED_DAYS_FOR_RANKING days their models are all unranked and the
  * headline falls back to MODEL_FALLBACK_ORDER rather than to a measured
  * winner. Their predictions are real from day one; the claim that one model is
  * beating the others is not, and the UI withholds it.
+ *
+ * `rolling_mean` starts in the second state EVERYWHERE, including at locations
+ * that have been scored for months: it is new, so it has no scored days, and it
+ * shows as unranked for its first MIN_SCORED_DAYS_FOR_RANKING days. It also has
+ * a cold start of its own kind — it needs `minDays` complete days in its window
+ * before it will emit at all, which at a brand-new location means roughly half
+ * a window of ingestion.
  */
 
 import { addLocalDays, localDayUtcRange, todayLocalDate } from '../src/lib/format';
-import { MIN_HOURS_FOR_SCORING } from '../src/lib/stations';
+import { lagSpec, resolveLagSpec, selectAnchors, type DailyMean } from '../src/lib/rolling';
+import { MIN_HOURS_FOR_SCORING, ROLLING_MEAN_WINDOW_DAYS } from '../src/lib/stations';
 import type {
   HorizonDays,
   IsoTimestamp,
   Json,
   LocalDate,
   ModelCoefficientMap,
+  ModelFitStats,
   ModelName,
   PredictionInputs,
   PredictionInsert,
@@ -100,13 +152,6 @@ const DELAY_MS = 200;
 /* Inputs                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** The most recent observed daily mean — persistence's answer and the model's anchor. */
-interface Anchor {
-  local_date: LocalDate;
-  pm25_avg: number;
-  hours_count: number;
-}
-
 /** One forecast day, derived from the Open-Meteo hourly arrays. */
 interface ForecastDay {
   windSpeedAvgMs: number | null;
@@ -122,33 +167,42 @@ interface ActiveCoefficients {
   version: number;
   intercept: number;
   coef: ModelCoefficientMap;
+  /** Carries `lag_window_days` — the definition `pm25_lag` was fitted on. */
+  stats: ModelFitStats | null;
 }
 
 /**
- * Read the anchor: the newest daily mean with enough coverage to be trusted.
+ * How many recent daily means to read.
  *
- * Prefers a day with `hours_count >= 12` (the same bar `prediction_scores` uses
- * before it will score a model) and falls back to the newest day of any depth,
- * recording which it used. A thin anchor is worse than a stale one, but no
- * anchor at all means no persistence prediction and no regression either — so
- * the fallback exists, labelled.
+ * Was 10, which was ample when the only question was "what is the newest day
+ * with 12 hours?". It is not ample once a 7-day window can contain gaps: ten
+ * rows newest-first covers ten CALENDAR days only if every one of them landed,
+ * and the days most likely to be missing are exactly the ones that make the
+ * window degrade. Reading a wider slice costs nothing and removes the
+ * possibility that the limit itself silently truncates the window.
  */
-async function readAnchor(locationId: number): Promise<{ anchor: Anchor | null; thin: boolean }> {
+const DAILY_MEANS_LIMIT = 40;
+
+/**
+ * Read recent daily means. The query, and no logic.
+ *
+ * All selection lives in `selectAnchors` (src/lib/rolling.ts) so that the
+ * definition of "the level we already know" is shared with the calibration
+ * script rather than reimplemented here. Reimplementing it here is how the
+ * train/inference mismatch happened in the first place.
+ */
+async function readDailyMeans(locationId: number): Promise<DailyMean[]> {
   const db = serviceClient();
   const { data, error } = await db
     .from('daily_aq')
     .select('local_date, pm25_avg, hours_count')
     .eq('location_id', locationId)
     .order('local_date', { ascending: false })
-    .limit(10)
-    .returns<Anchor[]>();
+    .limit(DAILY_MEANS_LIMIT)
+    .returns<DailyMean[]>();
 
-  if (error) throw new DbFailure(describeDbError('reading daily_aq for the persistence anchor', error));
-
-  const rows = data ?? [];
-  const solid = rows.find((r) => r.hours_count >= MIN_HOURS_FOR_SCORING);
-  if (solid) return { anchor: solid, thin: false };
-  return { anchor: rows[0] ?? null, thin: rows.length > 0 };
+  if (error) throw new DbFailure(describeDbError('reading daily_aq for the prediction anchors', error));
+  return data ?? [];
 }
 
 /** Active `wind_regression` coefficients, or `null` for a cold-start location. */
@@ -156,7 +210,11 @@ async function readCoefficients(locationId: number): Promise<ActiveCoefficients 
   const db = serviceClient();
   const { data, error } = await db
     .from('model_coefficients')
-    .select('id, version, intercept, coef')
+    // `stats` is not decoration here: it carries `lag_window_days`, and
+    // `resolveLagSpec` REFUSES a row that uses pm25_lag without declaring one.
+    // Dropping it from this select would turn every v2 row into a v1-shaped
+    // one and skip the model everywhere.
+    .select('id, version, intercept, coef, stats')
     .eq('location_id', locationId)
     .eq('model', 'wind_regression')
     .eq('is_active', true)
@@ -268,9 +326,51 @@ async function predictLocation(
   const rows: PredictionInsert[] = [];
   const skips: string[] = [];
 
-  /* -- 1. anchor + coefficients (database) -------------------------------- */
-  const { anchor, thin } = dryRun ? { anchor: null, thin: false } : await readAnchor(loc.id);
+  /* -- 1. anchors + coefficients (database) ------------------------------- */
+  const dailyMeans = dryRun ? [] : await readDailyMeans(loc.id);
   const coefficients = dryRun ? null : await readCoefficients(loc.id);
+
+  // `rolling_mean`'s window comes from a constant, not from the coefficients.
+  // That is what lets it run for Bali and the five Singapore regions, which
+  // have no coefficient row at all to read a window from.
+  const rollingSpec = lagSpec(ROLLING_MEAN_WINDOW_DAYS, MIN_HOURS_FOR_SCORING);
+  const naive = selectAnchors(dailyMeans, today, rollingSpec);
+  const anchor = naive.anchor;
+
+  // The regression's window comes from the COEFFICIENT ROW, because a slope is
+  // only correct for the lag definition it was fitted on. A v1-shaped row —
+  // pm25_lag with no declared window — is refused rather than guessed at.
+  let lagged: ReturnType<typeof selectAnchors> | null = null;
+  let lagSkip: string | null = null;
+  if (coefficients) {
+    const resolved = resolveLagSpec(coefficients.coef, coefficients.stats, MIN_HOURS_FOR_SCORING);
+    if ('reason' in resolved) {
+      lagSkip = `wind_regression: ${resolved.reason}`;
+    } else if (resolved.spec === null) {
+      // Coefficients that do not use pm25_lag at all (the old temp+wind
+      // specification). Nothing to resolve; `applyCoefficients` handles it.
+      lagged = null;
+    } else {
+      lagged = selectAnchors(dailyMeans, today, resolved.spec);
+      if (!lagged.rolling) lagSkip = `wind_regression: ${lagged.skip?.reason ?? 'no rolling lag'}`;
+    }
+  }
+
+  // Provenance shared by every row this run writes: what the run saw, including
+  // the partial day it deliberately did not use.
+  const runProvenance: PredictionInputs = {
+    ...(naive.provenance.partialToday
+      ? {
+          partial_today_pm25: Number(naive.provenance.partialToday.pm25_avg.toFixed(3)),
+          partial_today_hours: naive.provenance.partialToday.hours_count,
+        }
+      : {}),
+  };
+
+  if (!dryRun && naive.provenance.droppedRows > 0) {
+    skips.push(`daily_aq: ${naive.provenance.droppedRows} row(s) dropped as future-dated or non-finite`);
+  }
+  if (lagSkip) skips.push(lagSkip);
 
   /* -- 2. weather forecast (Open-Meteo) ----------------------------------- */
   // `past_days=1` so the target-day window is fully covered even at the local
@@ -327,17 +427,42 @@ async function predictLocation(
     if (!targetDate) continue;
     const window = localDayUtcRange(targetDate, tz);
 
-    /* persistence */
+    /* persistence — the last COMPLETE day, carried forward unchanged.
+     *
+     * Its only change this branch: `today` is excluded. It remains the naive
+     * benchmark, deliberately unimproved, because the whole wind-vs-persistence
+     * comparison rests on it being the same simple thing it has always been. */
     if (anchor) {
       rows.push(
         makePrediction(loc.id, targetDate, horizon, 'persistence', anchor.pm25_avg, {
+          ...runProvenance,
           source_date: anchor.local_date,
           observed_hours: anchor.hours_count,
-          ...(thin ? { thin_anchor: true } : {}),
+          anchor_age_days: anchor.ageDays,
+          ...(anchor.thin ? { thin_anchor: true } : {}),
         }),
       );
     } else if (horizon === 1) {
-      skips.push('persistence: no observed daily mean yet');
+      skips.push('persistence: no complete daily mean yet');
+    }
+
+    /* rolling_mean — the same value at every horizon, exactly as persistence
+     * does. No coefficients, so it runs everywhere including Bali and
+     * Singapore. */
+    if (naive.rolling) {
+      rows.push(
+        makePrediction(loc.id, targetDate, horizon, 'rolling_mean', naive.rolling.value, {
+          ...runProvenance,
+          window_days: naive.rolling.windowDays,
+          days_used: naive.rolling.daysUsed,
+          gap_days: naive.rolling.gapDays,
+          window_start: naive.rolling.windowStart,
+          window_end: naive.rolling.windowEnd,
+        }),
+        // coefficients_id stays null — there is nothing fitted to point at.
+      );
+    } else if (horizon === 1) {
+      skips.push(`rolling_mean: ${naive.skip?.reason ?? 'no rolling mean'}`);
     }
 
     /* cams */
@@ -362,6 +487,10 @@ async function predictLocation(
       continue;
     }
 
+    // Either the coefficients were refused as v1-shaped, or the window could
+    // not be filled. Both were already recorded once, above.
+    if (coefficients.coef.pm25_lag !== undefined && !lagged?.rolling) continue;
+
     const day = windByDate.get(targetDate);
     if (!day || day.hours < MIN_FORECAST_HOURS) {
       skips.push(`wind_regression: ${day ? `only ${day.hours}h of wind for ${targetDate}` : `no wind forecast for ${targetDate}`}`);
@@ -373,7 +502,10 @@ async function predictLocation(
     const predictors: Record<string, number | null> = {
       wind_speed_avg_ms: day.windSpeedAvgMs,
       temp_avg_c: day.tempAvgC,
-      pm25_lag: anchor?.pm25_avg ?? null,
+      // The ROLLING value, over the window this row's coefficients were fitted
+      // on — never today's partial day, and never a window from a local
+      // constant. See resolveLagSpec.
+      pm25_lag: lagged?.rolling?.value ?? null,
     };
 
     const applied = applyCoefficients(coefficients, predictors);
@@ -383,10 +515,19 @@ async function predictLocation(
     }
 
     const inputs: PredictionInputs = {
+      ...runProvenance,
       wind_speed_avg_ms: day.windSpeedAvgMs ?? undefined,
       temp_avg_c: coefficients.coef.temp_avg_c === undefined ? undefined : (day.tempAvgC ?? undefined),
-      pm25_lag: anchor?.pm25_avg,
-      pm25_lag_date: anchor?.local_date,
+      ...(lagged?.rolling
+        ? {
+            pm25_lag: lagged.rolling.value,
+            pm25_lag_window_days: lagged.rolling.windowDays,
+            pm25_lag_days_used: lagged.rolling.daysUsed,
+            pm25_lag_gap_days: lagged.rolling.gapDays,
+            pm25_lag_window_start: lagged.rolling.windowStart,
+            pm25_lag_window_end: lagged.rolling.windowEnd,
+          }
+        : {}),
       // Hours of the target day already elapsed at run time. Under the 19:37 WIB
       // schedule every horizon is entirely in the future, so this is 0 — the
       // field exists so an off-schedule run is distinguishable, not decorative.
@@ -395,6 +536,7 @@ async function predictLocation(
       forecast_fetched_at: fetchedAt,
       coefficients_version: coefficients.version,
       coefficients_predictors: Object.keys(coefficients.coef),
+      coefficients_specification: coefficients.stats?.specification,
       target_window_start: window?.startIso,
       target_window_end: window?.endIso,
     };

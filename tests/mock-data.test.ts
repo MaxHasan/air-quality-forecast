@@ -16,7 +16,12 @@ import {
   getLocationForecasts,
   getModelAccuracy,
 } from '@/lib/mock-data';
-import { LOCATIONS, MIN_HOURS_FOR_SCORING, MIN_SCORED_DAYS_FOR_RANKING } from '@/lib/stations';
+import {
+  LOCATIONS,
+  MIN_HOURS_FOR_SCORING,
+  MIN_SCORED_DAYS_FOR_RANKING,
+  ROLLING_MEAN_WINDOW_DAYS,
+} from '@/lib/stations';
 
 describe('mock data seam', () => {
   it('returns one forecast per location, in LOCATIONS order', async () => {
@@ -118,9 +123,15 @@ describe('mock data seam', () => {
     const forecast = daily.slice(30);
     expect(history.every((d) => d.actual_pm25 !== null)).toBe(true);
     expect(forecast.every((d) => d.actual_pm25 === null)).toBe(true);
-    expect(forecast.every((d) => 'wind_regression' in d.predicted && 'cams' in d.predicted && 'persistence' in d.predicted)).toBe(
-      true,
-    );
+    expect(
+      forecast.every(
+        (d) =>
+          'wind_regression' in d.predicted &&
+          'cams' in d.predicted &&
+          'persistence' in d.predicted &&
+          'rolling_mean' in d.predicted,
+      ),
+    ).toBe(true);
   });
 
   it('omits wind_regression from the forecast fan for calibrating locations', async () => {
@@ -128,6 +139,39 @@ describe('mock data seam', () => {
     const forecast = daily.slice(30);
     expect(forecast.every((d) => !('wind_regression' in d.predicted))).toBe(true);
     expect(forecast.every((d) => 'cams' in d.predicted)).toBe(true);
+    // rolling_mean needs no fit, so it IS present here. That asymmetry is the
+    // reason the fourth model exists: these locations previously had only CAMS
+    // and one naive benchmark.
+    expect(forecast.every((d) => 'rolling_mean' in d.predicted)).toBe(true);
+  });
+
+  it('builds the forecast fan’s naive models from complete days only', async () => {
+    // history[29] is today — partial, and the thing the 2026-09 fix stopped
+    // using. persistence must carry history[28] forward, never history[29].
+    const daily = await getDailyHistory('jakarta-central');
+    const history = daily.slice(0, 30);
+    const forecast = daily.slice(30);
+
+    const today = history[29];
+    const lastComplete = history[28];
+    expect(today.actual_pm25).not.toBeNull();
+    expect(lastComplete.actual_pm25).not.toBeNull();
+
+    for (const f of forecast) {
+      expect(f.predicted.persistence).toBe(lastComplete.actual_pm25);
+      expect(f.predicted.persistence).not.toBe(today.actual_pm25);
+    }
+
+    // Both naive models are flat across the fan — one number carried forward.
+    expect(new Set(forecast.map((f) => f.predicted.persistence)).size).toBe(1);
+    expect(new Set(forecast.map((f) => f.predicted.rolling_mean)).size).toBe(1);
+
+    // And the rolling mean sits inside the range of the days it averages,
+    // which a mean must and a carried-forward single day need not.
+    const window = history.slice(29 - ROLLING_MEAN_WINDOW_DAYS, 29).map((d) => d.actual_pm25 as number);
+    const mean = forecast[0].predicted.rolling_mean as number;
+    expect(mean).toBeGreaterThanOrEqual(Math.min(...window) - 0.05);
+    expect(mean).toBeLessThanOrEqual(Math.max(...window) + 0.05);
   });
 
   it('excludes sg-west entirely from model_accuracy (zero scored days -> no view rows)', async () => {
@@ -157,6 +201,55 @@ describe('mock data seam', () => {
         expect(at(slug, horizon, 'cams')).toBeGreaterThan(at(slug, horizon, 'wind_regression'));
       }
     }
+  });
+
+  it('keeps telling the rest of the story: rolling_mean leads at every horizon', async () => {
+    // The 2026-09 backtest's headline finding
+    // (docs/backtests/2026-09-rolling-lag.md): once persistence is scored
+    // honestly against the last COMPLETE day, a plain 7-day mean beats every
+    // other model at every horizon and both locations — including the wind
+    // hybrid, and including an unattainable oracle single day.
+    //
+    // The fixtures have to carry that, because a mock that shows the wind model
+    // winning sets an expectation production would then have to disappoint. It
+    // is also why rolling_mean is worth a place on the board rather than a
+    // courtesy line on a chart.
+    const rows = await getModelAccuracy();
+    const at = (slug: string, horizon: number, model: string) =>
+      rows.find((r) => r.location_slug === slug && r.horizon_days === horizon && r.model === model)!.mae;
+
+    for (const slug of CALIBRATED) {
+      for (const horizon of [1, 2, 3] as const) {
+        expect(at(slug, horizon, 'rolling_mean')).toBeLessThan(at(slug, horizon, 'persistence'));
+        expect(at(slug, horizon, 'rolling_mean')).toBeLessThan(at(slug, horizon, 'wind_regression'));
+        expect(at(slug, horizon, 'rolling_mean')).toBeLessThan(at(slug, horizon, 'cams'));
+      }
+      // Flattest of the four: a 7-day mean barely changes between issue dates a
+      // day apart, so its error grows more slowly than persistence's.
+      expect(at(slug, 3, 'rolling_mean') - at(slug, 1, 'rolling_mean')).toBeLessThan(
+        at(slug, 3, 'persistence') - at(slug, 1, 'persistence'),
+      );
+    }
+  });
+
+  it('scores rolling_mean everywhere, including locations with no fitted wind model', async () => {
+    const rows = await getModelAccuracy();
+    // sg-west is the live-outage fixture with zero scored days, so it has no
+    // view rows for any model.
+    const scored = rows.filter((r) => r.location_slug !== 'sg-west');
+    const slugs = [...new Set(scored.map((r) => r.location_slug))];
+
+    for (const slug of slugs) {
+      expect(
+        scored.some((r) => r.location_slug === slug && r.model === 'rolling_mean'),
+        `${slug} must carry rolling_mean`,
+      ).toBe(true);
+    }
+    // And at least one of them genuinely has no wind model — otherwise this
+    // test would pass without exercising the case it exists for.
+    expect(slugs.some((s) => !scored.some((r) => r.location_slug === s && r.model === 'wind_regression'))).toBe(
+      true,
+    );
   });
 
   it('reports a non-trivial failure streak for the footer', async () => {

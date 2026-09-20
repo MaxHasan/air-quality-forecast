@@ -50,13 +50,17 @@ export const MODEL_LABELS: Readonly<Record<ModelName, string>> = {
   wind_regression: 'Wind model',
   cams: 'CAMS forecast',
   persistence: 'Persistence',
+  rolling_mean: 'Rolling average',
 } as const;
 
 /** One-line description of what a model does, for tooltips and the /about page. */
 export const MODEL_DESCRIPTIONS: Readonly<Record<ModelName, string>> = {
   wind_regression: "Massimiliano's wind-speed regression, fitted per region on observed PM2.5 and wind.",
   cams: "Open-Meteo's CAMS atmospheric forecast, a 40 km-grid global model.",
-  persistence: "Tomorrow looks like today — today's running average carried forward.",
+  // Both of these deliberately say "yesterday" rather than "today": neither
+  // uses the day in progress, and that is the change shipped in 2026-09.
+  persistence: 'Tomorrow looks like yesterday — the last complete day, carried forward.',
+  rolling_mean: 'Tomorrow looks like the past week — the average of the last seven complete days.',
 } as const;
 
 /** Short model abbreviation for tight spaces (model strips, table headers). */
@@ -64,6 +68,7 @@ export const MODEL_SHORT_LABELS: Readonly<Record<ModelName, string>> = {
   wind_regression: 'Wind',
   cams: 'CAMS',
   persistence: 'Persist.',
+  rolling_mean: '7-day avg',
 } as const;
 
 export function formatHorizon(horizon: HorizonDays): string {

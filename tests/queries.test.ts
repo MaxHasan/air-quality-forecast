@@ -153,11 +153,17 @@ function seedColdStart(): void {
       prediction('jakarta-central', 'persistence', 37.1),
       prediction('jakarta-central', 'cams', 51.8416666666667),
       prediction('jakarta-central', 'wind_regression', 37.707893115),
+      prediction('jakarta-central', 'rolling_mean', 35.4),
       prediction('bsd', 'persistence', 72.9),
       prediction('bsd', 'cams', 88.3291666666667),
       prediction('bsd', 'wind_regression', 65.21151577),
+      prediction('bsd', 'rolling_mean', 69.8),
       prediction('sg-central', 'persistence', 31.17),
       prediction('sg-central', 'cams', 17.77),
+      // sg-central has no fitted wind model, and `rolling_mean` needs none —
+      // which is the point of the fourth model. It is present here precisely
+      // where wind_regression is not.
+      prediction('sg-central', 'rolling_mean', 29.4),
     ],
     daily_aq: [
       dailyAq('jakarta-central', todayFor('jakarta-central'), 37.1, 1, 2),
@@ -200,8 +206,96 @@ describe('getLocationForecasts', () => {
     // preference decides: wind_regression first.
     expect(jakarta!.headline!.model).toBe(MODEL_FALLBACK_ORDER[0]);
     expect(jakarta!.headline!.predicted_pm25).toBeCloseTo(37.7, 5);
-    expect(jakarta!.models.map((m) => m.model)).toEqual(['wind_regression', 'cams', 'persistence']);
+    expect(jakarta!.models.map((m) => m.model)).toEqual([
+      'wind_regression',
+      'cams',
+      'persistence',
+      'rolling_mean',
+    ]);
     expect(jakarta!.models.every((m) => m.mae === null && m.n === 0)).toBe(true);
+  });
+
+  it('lets rolling_mean take the headline once it has earned it on MAE', async () => {
+    // The point of shipping a fourth model rather than just fixing the third.
+    // `rolling_mean` is LAST in MODEL_FALLBACK_ORDER, so if measured skill did
+    // not override the cold-start preference it could never lead — and on the
+    // 2026-09 holdout it was the strongest model at every horizon.
+    const tomorrow = tomorrowFor('jakarta-central');
+    serve({
+      locations: locationRows,
+      stations: [{ id: 1 }],
+      model_accuracy: [
+        accuracy('jakarta-central', 'wind_regression', 1, 30, 8.1),
+        accuracy('jakarta-central', 'cams', 1, 30, 8.6),
+        accuracy('jakarta-central', 'persistence', 1, 30, 6.9),
+        accuracy('jakarta-central', 'rolling_mean', 1, 30, 6.1),
+      ],
+      predictions: [
+        prediction('jakarta-central', 'wind_regression', 40.2, 1, tomorrow),
+        prediction('jakarta-central', 'cams', 51.8, 1, tomorrow),
+        prediction('jakarta-central', 'persistence', 37.1, 1, tomorrow),
+        prediction('jakarta-central', 'rolling_mean', 35.4, 1, tomorrow),
+      ],
+      daily_aq: [dailyAq('jakarta-central', todayFor('jakarta-central'), 37.1, 19, 2)],
+    });
+
+    const jakarta = await queries.getLocationForecast('jakarta-central');
+    expect(jakarta!.headline!.model).toBe('rolling_mean');
+    expect(jakarta!.headline!.predicted_pm25).toBeCloseTo(35.4, 5);
+    expect(jakarta!.headline!.mae).toBeCloseTo(6.1, 5);
+  });
+
+  it('withholds the lead from rolling_mean until it has enough scored days', async () => {
+    // It enters with zero scored days and is unranked for its first
+    // MIN_SCORED_DAYS_FOR_RANKING. A lower MAE on 3 days is not evidence, and
+    // the cold-start order must decide instead.
+    const tomorrow = tomorrowFor('jakarta-central');
+    serve({
+      locations: locationRows,
+      stations: [{ id: 1 }],
+      model_accuracy: [
+        accuracy('jakarta-central', 'wind_regression', 1, 30, 8.1),
+        accuracy('jakarta-central', 'rolling_mean', 1, MIN_SCORED_DAYS_FOR_RANKING - 1, 2.0),
+      ],
+      predictions: [
+        prediction('jakarta-central', 'wind_regression', 40.2, 1, tomorrow),
+        prediction('jakarta-central', 'rolling_mean', 35.4, 1, tomorrow),
+      ],
+      daily_aq: [dailyAq('jakarta-central', todayFor('jakarta-central'), 37.1, 19, 2)],
+    });
+
+    const jakarta = await queries.getLocationForecast('jakarta-central');
+    expect(jakarta!.headline!.model).toBe('wind_regression');
+  });
+
+  it('carries rolling_mean at a location with no fitted wind model', async () => {
+    // Seeded on its own rather than through seedColdStart: the fake responder
+    // serves one prediction set to every location, so a shared fixture cannot
+    // express "this location has no wind_regression row".
+    serve({
+      // Only this location: the fake responder ignores `.eq('slug', …)`, so
+      // fetchLocation takes the first row it is given.
+      locations: locationRows.filter((l) => l.slug === 'sg-central'),
+      stations: [{ id: 1 }],
+      model_accuracy: [],
+      predictions: [
+        prediction('sg-central', 'cams', 17.77),
+        prediction('sg-central', 'persistence', 31.17),
+        // No fitted model here, and rolling_mean needs none — which is the
+        // point of the fourth model. Bali and the five Singapore regions
+        // previously had only CAMS and one naive benchmark.
+        prediction('sg-central', 'rolling_mean', 29.4),
+      ],
+      daily_aq: [dailyAq('sg-central', todayFor('sg-central'), 31.17, 23, 1)],
+    });
+
+    const sg = await queries.getLocationForecast('sg-central');
+    const models = sg!.models.map((m) => m.model);
+    expect(models).toContain('rolling_mean');
+    expect(models).not.toContain('wind_regression');
+    // Still "calibrating" — that flag is about the absent WIND model, and a
+    // fourth coefficient-free model must not quietly clear it.
+    expect(sg!.calibrating).toBe(true);
   });
 
   it('falls back to a longer-horizon call when tonight’s run has not happened yet', async () => {

@@ -91,6 +91,20 @@ hour, and `keepalive.yml` is weekly by design.
 **Keep the existing `schedule:` blocks.** They cost nothing when they fire and are the fallback if
 the external scheduler lapses.
 
+### Status: live since 2026-09-20
+
+Both pingers are configured and returning `204`, and — the part a `204` alone does not prove — a
+dispatched run has actually landed and succeeded:
+
+```
+09-20T10:05  workflow_dispatch  completed success
+09-20T06:13  schedule           completed success
+09-20T01:06  schedule           completed success
+```
+
+The `schedule` entries above it are the surviving native triggers, roughly five hours apart, which
+is the gap this exists to fill.
+
 ## What not to do
 
 Do not respond to thin coverage by lowering `MIN_HOURS_FOR_SCORING`, or the rolling lag's

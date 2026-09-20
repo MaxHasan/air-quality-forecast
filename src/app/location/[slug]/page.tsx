@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { getDailyHistory, getHourlyPm25, getLocationForecast } from '@/lib/data';
 import { LOCATIONS, locationBySlug } from '@/lib/stations';
 import type { LocationSlug } from '@/lib/types';
-import { formatLocalDateLabel, formatPm25 } from '@/lib/display';
+import { formatLongDateLabel, formatPm25 } from '@/lib/display';
 import { AqiPill } from '@/components/AqiPill';
 import { ModelStrip } from '@/components/ModelStrip';
 import { VerdictPanel } from '@/components/VerdictPanel';
@@ -55,7 +55,7 @@ export default async function LocationPage({ params }: PageProps) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold sm:text-3xl">{loc.name}</h1>
-            <p className="text-sm text-muted">Forecast for {formatLocalDateLabel(forecast.target_date)}</p>
+            <p className="text-sm text-muted">Forecast for {formatLongDateLabel(forecast.target_date)}</p>
           </div>
           <AqiPill pm25={headlinePm25} size="lg" />
         </div>

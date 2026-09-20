@@ -3,8 +3,8 @@ import type { ActivityKey, LocationForecast } from '@/lib/types';
 import { ACTIVITY_THRESHOLDS } from '@/lib/thresholds';
 import { activityVerdictsFor } from '@/lib/verdicts';
 import { AqiPill } from './AqiPill';
-import { VerdictBadge, VerdictBadgeUnknown } from './VerdictBadge';
-import { TREND_PRESENTATION, formatLocalDateLabel, formatPm25, pm25Trend } from '@/lib/display';
+import { VerdictBadge, VerdictBadgeAll, VerdictBadgeUnknown } from './VerdictBadge';
+import { TREND_PRESENTATION, formatLongDateLabel, formatPm25, pm25Trend } from '@/lib/display';
 
 interface LocationCardProps {
   forecast: LocationForecast;
@@ -15,6 +15,17 @@ export function LocationCard({ forecast, visibleActivities }: LocationCardProps)
   const { location, headline, target_date, calibrating, latest_actual, today_prediction } = forecast;
   const verdicts = activityVerdictsFor(headline?.predicted_pm25 ?? null);
   const shown = visibleActivities ?? ACTIVITY_THRESHOLDS.map((t) => t.key);
+  const shownThresholds = ACTIVITY_THRESHOLDS.filter((t) => shown.includes(t.key));
+  const shownVerdicts = shownThresholds.map((t) => verdicts?.find((v) => v.activity === t.key) ?? null);
+
+  // When every activity on show lands on the same verdict — the common case on
+  // a genuinely bad or genuinely clear day — the three rows repeat one fact and
+  // the card turns into a block of one colour. Collapse them into a single
+  // badge instead. The `?.` comparison also folds the all-unknown case, where
+  // every entry is null: `activityVerdictsFor` returns all verdicts or none, so
+  // there is no partial state to mishandle.
+  const sharedVerdict = shownVerdicts[0]?.verdict ?? null;
+  const collapse = shownThresholds.length > 1 && shownVerdicts.every((v) => (v?.verdict ?? null) === sharedVerdict);
 
   // Today's reference level: the observed rollup when the stations have
   // reported, else the value today was forecast at. The observed figure wins
@@ -32,8 +43,12 @@ export function LocationCard({ forecast, visibleActivities }: LocationCardProps)
     >
       <div>
         <h2 className="text-lg font-semibold">{location.name}</h2>
-        <p className="text-xs text-muted">
-          Forecast for {formatLocalDateLabel(target_date)}
+        <p className="text-sm text-muted">
+          {/* The date carries the whole promise of the card — this is tomorrow,
+              decided tonight — so it is spelled out and set above the caption
+              around it rather than reading as small print. */}
+          Forecast for{' '}
+          <span className="font-semibold text-foreground">{formatLongDateLabel(target_date)}</span>
           {calibrating && (
             <span className="ml-1.5 inline-flex items-center rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
               Calibrating
@@ -58,16 +73,28 @@ export function LocationCard({ forecast, visibleActivities }: LocationCardProps)
           the card itself can end up *narrower* on a wide screen than on a
           medium one, and a viewport-based `sm:` would cram three long labels
           into a slim column right when the outer grid picks three-up. */}
-      <div className="grid grid-cols-1 gap-2 @sm:grid-cols-3">
-        {ACTIVITY_THRESHOLDS.filter((t) => shown.includes(t.key)).map((t) => {
-          const v = verdicts?.find((x) => x.activity === t.key) ?? null;
-          return v ? (
-            <VerdictBadge key={t.key} verdict={v} />
-          ) : (
-            <VerdictBadgeUnknown key={t.key} activityLabel={t.shortLabel} icon={t.icon} />
-          );
-        })}
-      </div>
+      {collapse ? (
+        <VerdictBadgeAll
+          icons={shownThresholds.map((t) => t.icon)}
+          label={
+            shownThresholds.length === ACTIVITY_THRESHOLDS.length
+              ? 'All three activities'
+              : shownThresholds.map((t) => t.shortLabel).join(' & ')
+          }
+          verdict={sharedVerdict}
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-2 @sm:grid-cols-3">
+          {shownThresholds.map((t, i) => {
+            const v = shownVerdicts[i];
+            return v ? (
+              <VerdictBadge key={t.key} verdict={v} />
+            ) : (
+              <VerdictBadgeUnknown key={t.key} activityLabel={t.shortLabel} icon={t.icon} />
+            );
+          })}
+        </div>
+      )}
 
       {/* One light reference line: tomorrow's EPA category and today's level
           with its trend glyph. The current AQI is context now, not the

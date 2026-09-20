@@ -64,3 +64,53 @@ export function VerdictBadgeUnknown({ activityLabel, icon, compact }: { activity
     </div>
   );
 }
+
+interface VerdictBadgeAllProps {
+  /** The covered activities' icons, in `ACTIVITY_THRESHOLDS` order. */
+  icons: readonly string[];
+  /** What the badge covers, e.g. `All three activities` or `Run & Swim`. */
+  label: string;
+  /** `null` when there is no PM2.5 value to judge — never a fabricated verdict. */
+  verdict: Verdict | null;
+}
+
+/**
+ * One badge standing in for several activities that all landed on the same
+ * verdict.
+ *
+ * Three identical rows state one fact three times, and on a bad day the whole
+ * card becomes a wall of a single colour with nothing to read. Collapsing them
+ * buys back the room for `VERDICT_PRESENTATION.summary` — the advice line the
+ * per-activity badges have never had space for. The icons stay so it is still
+ * obvious, without expanding anything, which activities were judged.
+ */
+export function VerdictBadgeAll({ icons, label, verdict }: VerdictBadgeAllProps) {
+  const presentation = verdict ? VERDICT_PRESENTATION[verdict] : null;
+  const toneClass = verdict
+    ? TONE_CLASSES[verdict]
+    : 'border-dashed border-surface-border bg-surface-muted text-muted';
+
+  return (
+    <div className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm ${toneClass}`}>
+      <span aria-hidden className={`flex shrink-0 gap-0.5 text-base leading-none ${verdict ? '' : 'opacity-60'}`}>
+        {icons.map((icon, i) => (
+          <span key={i}>{icon}</span>
+        ))}
+      </span>
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="font-medium">{label}</span>
+        {presentation ? (
+          <>
+            <span className="flex items-center gap-1 font-semibold">
+              <span aria-hidden>{VERDICT_GLYPH[verdict as Verdict]}</span>
+              {presentation.label}
+            </span>
+            <span className="text-xs opacity-80">{presentation.summary}</span>
+          </>
+        ) : (
+          <span>No data</span>
+        )}
+      </span>
+    </div>
+  );
+}

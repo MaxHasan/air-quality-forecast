@@ -25,6 +25,31 @@ export function formatLocalDateLabel(localDate: LocalDate, opts: { withYear?: bo
   }).format(dt);
 }
 
+/** `1` → `st`, `2` → `nd`, `3` → `rd`, `11` → `th`. `Intl.PluralRules` with
+ * `type: 'ordinal'` knows the exceptions (11th, 12th, 13th) that a naive
+ * modulo-10 lookup gets wrong. */
+const ORDINAL_SUFFIX: Readonly<Record<Intl.LDMLPluralRule, string>> = {
+  one: 'st',
+  two: 'nd',
+  few: 'rd',
+  other: 'th',
+  zero: 'th',
+  many: 'th',
+};
+
+/** `YYYY-MM-DD` → e.g. `Monday, September 21st`. The spelled-out form, for the
+ * one place on a card where the date is the thing being read rather than a
+ * caption. Calendar-only, like `formatLocalDateLabel`. */
+export function formatLongDateLabel(localDate: LocalDate): string {
+  const [y, m, d] = localDate.split('-').map(Number);
+  if (!y || !m || !d) return localDate;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(dt);
+  const month = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long' }).format(dt);
+  const suffix = ORDINAL_SUFFIX[new Intl.PluralRules('en-US', { type: 'ordinal' }).select(d)];
+  return `${weekday}, ${month} ${d}${suffix}`;
+}
+
 /** Short weekday + day, for tight chart axes, e.g. `Mon 17`. */
 export function formatShortDateLabel(localDate: LocalDate): string {
   const [y, m, d] = localDate.split('-').map(Number);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { meanAbsoluteError, olsFit2, olsPredict, type OlsSample } from '@/lib/regression';
+import { maeDifference, meanAbsoluteError, olsFit2, olsPredict, type OlsSample } from '@/lib/regression';
 
 /**
  * The published fixture.
@@ -153,5 +153,82 @@ describe('meanAbsoluteError', () => {
   it('returns null when nothing is scorable', () => {
     expect(meanAbsoluteError([])).toBeNull();
     expect(meanAbsoluteError([{ predicted: Number.NaN, actual: 25 }])).toBeNull();
+  });
+});
+
+describe('maeDifference', () => {
+  it('reports the signed gap between two models’ MAEs', () => {
+    // A is off by 1 every day, B by 3. A is better, so the difference is -2.
+    const a = [
+      { predicted: 11, actual: 10 },
+      { predicted: 21, actual: 20 },
+      { predicted: 31, actual: 30 },
+    ];
+    const b = [
+      { predicted: 13, actual: 10 },
+      { predicted: 23, actual: 20 },
+      { predicted: 33, actual: 30 },
+    ];
+    const d = maeDifference(a, b);
+    expect(d?.n).toBe(3);
+    expect(d?.difference).toBeCloseTo(-2, 10);
+    // The per-day differences are identical, so there is no spread at all.
+    expect(d?.stdError).toBeCloseTo(0, 10);
+  });
+
+  it('is the paired difference, not the difference of two independent means', () => {
+    // Both models have the SAME MAE (2), but they are wrong on different days.
+    // The unpaired view sees no difference and no spread; the paired view sees
+    // no difference and a large spread — which is the honest answer, because a
+    // day-by-day coin flip is exactly what this is.
+    const a = [
+      { predicted: 14, actual: 10 },
+      { predicted: 20, actual: 20 },
+    ];
+    const b = [
+      { predicted: 10, actual: 10 },
+      { predicted: 24, actual: 20 },
+    ];
+    expect(meanAbsoluteError(a)).toBeCloseTo(meanAbsoluteError(b) as number, 10);
+
+    const d = maeDifference(a, b);
+    expect(d?.difference).toBeCloseTo(0, 10);
+    // Per-day differences are +4 and -4: sd = 5.657, SE = sd/sqrt(2) = 4.
+    expect(d?.stdError).toBeCloseTo(4, 6);
+  });
+
+  it('cancels the shared “how hard was today” component', () => {
+    // A hard day and an easy day, with A beating B by exactly 1 on each. The
+    // spread BETWEEN days is enormous; the spread of the DIFFERENCE is zero.
+    const a = [
+      { predicted: 60, actual: 100 },
+      { predicted: 10, actual: 11 },
+    ];
+    const b = [
+      { predicted: 59, actual: 100 },
+      { predicted: 10, actual: 12 },
+    ];
+    const d = maeDifference(a, b);
+    expect(d?.difference).toBeCloseTo(-1, 10);
+    expect(d?.stdError).toBeCloseTo(0, 10);
+  });
+
+  it('refuses misaligned inputs rather than comparing the wrong days', () => {
+    const a = [{ predicted: 1, actual: 1 }];
+    expect(maeDifference(a, [])).toBeNull();
+    expect(maeDifference([], [])).toBeNull();
+    expect(maeDifference(a, [{ predicted: 1, actual: 1 }, { predicted: 2, actual: 2 }])).toBeNull();
+  });
+
+  it('returns null on any non-finite value instead of a NaN difference', () => {
+    const d = maeDifference([{ predicted: Number.NaN, actual: 10 }], [{ predicted: 10, actual: 10 }]);
+    expect(d).toBeNull();
+  });
+
+  it('has no standard error from a single pair', () => {
+    const d = maeDifference([{ predicted: 12, actual: 10 }], [{ predicted: 15, actual: 10 }]);
+    expect(d?.n).toBe(1);
+    expect(d?.difference).toBeCloseTo(-3, 10);
+    expect(d?.stdError).toBeNull();
   });
 });

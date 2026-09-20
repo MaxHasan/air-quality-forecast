@@ -1,6 +1,20 @@
-import { MODEL_FALLBACK_ORDER, type HorizonDays, type LocationSlug, type ModelAccuracyRow, type ModelName } from '@/lib/types';
-import { LOCATIONS, MIN_SCORED_DAYS_FOR_RANKING } from '@/lib/stations';
-import { MODEL_LABELS, formatHorizon, formatMetric, scoredDaysRemaining } from '@/lib/display';
+import {
+  MODEL_FALLBACK_ORDER,
+  type HorizonDays,
+  type LocalDate,
+  type LocationSlug,
+  type ModelAccuracyRow,
+  type ModelName,
+} from '@/lib/types';
+import { LOCATIONS, MIN_SCORED_DAYS_FOR_RANKING, STALE_SCORE_DAYS } from '@/lib/stations';
+import {
+  MODEL_LABELS,
+  daysSinceLocalDate,
+  formatHorizon,
+  formatLocalDateLabel,
+  formatMetric,
+  scoredDaysRemaining,
+} from '@/lib/display';
 
 /**
  * NOT compiler-enforced — a plain array, not a `Record<ModelName, …>`.
@@ -31,9 +45,35 @@ export function AccuracyTable({ rows }: AccuracyTableProps) {
     <div className="flex flex-col gap-6">
       {LOCATIONS.map((loc) => {
         const locRows = bySlug.get(loc.slug) ?? [];
+        // How old is the freshest thing being reported here?
+        //
+        // `model_accuracy` is a rolling 30-day window, so a location whose feed
+        // died three weeks ago still publishes numbers — computed from the days
+        // before it died, and presented with nothing to say so. jakarta-north
+        // read "persistence 1.83" for weeks after its last observation; that
+        // figure was real and correctly computed, and it described August.
+        //
+        // Deliberately NOT suppressed. Hiding a measurement because it is old
+        // throws away the only evidence there is; dating it lets the reader
+        // decide. The bar for "stale" is the same one the ingestion footer
+        // uses, in days rather than hours.
+        const lastScored = locRows.reduce<LocalDate | null>(
+          (newest, r) => (newest === null || r.last_scored_date > newest ? r.last_scored_date : newest),
+          null,
+        );
+        const staleDays = lastScored ? daysSinceLocalDate(lastScored, loc.timezone) : null;
+        const isStale = staleDays !== null && staleDays > STALE_SCORE_DAYS;
+
         return (
           <section key={loc.slug} className="rounded-xl border border-surface-border bg-surface p-4 sm:p-5">
             <h3 className="mb-3 text-base font-semibold">{loc.name}</h3>
+            {isStale && lastScored && (
+              <p className="mb-3 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-xs text-warning">
+                <span aria-hidden>▲ </span>
+                Last scored {formatLocalDateLabel(lastScored)}, {staleDays} days ago. These figures describe that
+                period, not today — the ground-truth feed has been quiet since.
+              </p>
+            )}
             {locRows.length === 0 ? (
               <p className="rounded-lg bg-surface-muted px-3 py-3 text-sm text-muted">
                 No scored predictions yet — check the footer for ingestion status; scoring resumes once a full day of

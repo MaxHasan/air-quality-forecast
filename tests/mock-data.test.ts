@@ -54,13 +54,18 @@ describe('mock data seam', () => {
   });
 
   it('separates "has a fitted model" from "has enough scored days to rank it"', async () => {
-    // jakarta-central has both. jakarta-north has the first and not the second
+    // jakarta-central has both. jakarta-west has the first and not the second
     // — the state that used to be unrepresentable, and the one the mock's
     // calibrating rule got wrong until it was aligned with queries.ts.
+    //
+    // This case used to be pinned to jakarta-north, which was retired on
+    // 2026-09-20 when its only feed died (see RETIRED_LOCATIONS). Any location
+    // whose SCORED_DAYS sits below MIN_SCORED_DAYS_FOR_RANKING while carrying
+    // fitted coefficients exercises the same state.
     const ranked = await getLocationForecast('jakarta-central');
     expect(ranked!.headline!.n).toBeGreaterThanOrEqual(MIN_SCORED_DAYS_FOR_RANKING);
 
-    const unranked = await getLocationForecast('jakarta-north');
+    const unranked = await getLocationForecast('jakarta-west');
     expect(unranked!.calibrating).toBe(false);
     expect(unranked!.models.map((m) => m.model)).toContain('wind_regression');
     expect(unranked!.models.every((m) => m.n < MIN_SCORED_DAYS_FOR_RANKING)).toBe(true);

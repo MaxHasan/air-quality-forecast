@@ -9,7 +9,7 @@ import {
   thresholdFor,
   verdictFor,
 } from '@/lib/thresholds';
-import { ALL_STATIONS, LOCATIONS, MIN_HOURS_FOR_SCORING } from '@/lib/stations';
+import { ALL_STATIONS, LOCATIONS, MIN_HOURS_FOR_SCORING, RETIRED_LOCATIONS, isRetiredLocation } from '@/lib/stations';
 import { MODEL_FALLBACK_ORDER } from '@/lib/types';
 import { defaultMinDays } from '@/lib/rolling';
 // Importing a script is safe here: fit-wind-model.ts guards its main() behind
@@ -151,6 +151,33 @@ describe('stations.ts agrees with the seed migrations', () => {
     const slugs = new Set(LOCATIONS.map((l) => l.slug));
     for (const s of ALL_STATIONS) {
       expect(slugs.has(s.locationSlug)).toBe(true);
+    }
+  });
+
+  it('keeps a retired location in the seed, and out of the registry', () => {
+    // Retirement is a display and scheduling decision, not a deletion. The
+    // seed migrations must still create the row — `locations.id` is the parent
+    // of every observation, rollup, coefficient and prediction through
+    // `on delete cascade`, so a database rebuilt without it would come back
+    // missing months of real measurements rather than merely missing a card.
+    for (const r of RETIRED_LOCATIONS) {
+      expect(seed, `${r.slug} must remain in the seed migrations`).toContain(`'${r.slug}'`);
+      expect(LOCATIONS.map((l) => l.slug), `${r.slug} must not be in LOCATIONS`).not.toContain(r.slug);
+      expect(isRetiredLocation(r.slug)).toBe(true);
+      // A reason a future reader can act on, not just a tombstone.
+      expect(r.reason.length, `${r.slug} needs a reason`).toBeGreaterThan(60);
+    }
+  });
+
+  it('leaves no station pointing at a retired location', () => {
+    // A station whose locationSlug is retired would be ingested into a place
+    // the app does not serve: real API calls, real rows, nothing rendering
+    // them. It is also exactly the drift `maps every station to a known
+    // location` would catch — this says which half is wrong.
+    for (const s of ALL_STATIONS) {
+      expect(isRetiredLocation(s.locationSlug), `station ${s.sourceStationId} feeds retired ${s.locationSlug}`).toBe(
+        false,
+      );
     }
   });
 

@@ -24,6 +24,7 @@
 
 import { getServiceClient, hasServiceCredentials, type Db } from '../../src/lib/db';
 import type { LocationSlug, StationRow } from '../../src/lib/types';
+import { isRetiredLocation } from '../../src/lib/stations';
 
 /** The shape supabase-js hands back on failure. */
 export interface DbErrorLike {
@@ -194,7 +195,16 @@ export async function loadLocations(db: Db): Promise<LocationRecord[]> {
   if (!data || data.length === 0) {
     throw new DbFailure(`No rows in public.locations.\n\n${SETUP_HINT}`);
   }
-  return data;
+
+  // Retired locations keep their rows — the history is real and `on delete
+  // cascade` would take it — but no job should keep working them. Left in,
+  // every run would pull weather for a place with no feed, write predictions
+  // nobody can see, and log a skip for the missing anchor forever.
+  //
+  // The emptiness check above runs on the raw rows on purpose: "the table is
+  // empty" and "every location is retired" are different problems, and only the
+  // first one is the setup mistake SETUP_HINT describes.
+  return data.filter((l) => !isRetiredLocation(l.slug));
 }
 
 /** The subset of `stations` the ingestion scripts need. */

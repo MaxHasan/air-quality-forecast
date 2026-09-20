@@ -284,13 +284,39 @@ describe('migration SQL agrees with the shipped constants', () => {
     );
   });
 
-  it.each(seedMigrations)('%s preserves 0006’s annotations instead of replacing stats', (file) => {
+  it.each(seedMigrations)('%s merges stats on conflict instead of replacing them', (file) => {
     const sql = readStatements(file);
     // `stats = excluded.stats` would wipe station_mix_changed_at off exactly
     // the two locations 0006 stamped it onto. Applying 0007 did that once.
     expect(sql).not.toMatch(/stats\s*=\s*excluded\.stats/);
     expect(sql).toMatch(/stats\s*=\s*\(coalesce\(model_coefficients\.stats/);
     expect(sql).toContain("- array['r2'");
+  });
+
+  it('carries 0006’s station-mix annotation onto the active version 2 rows', () => {
+    // The assertion above is about the `on conflict ... do update` clause, and
+    // it passed all along while the thing it describes was not happening: 0009
+    // and 0010 INSERTED version 2 for the first time, so there was no conflict,
+    // no merge, and the annotation stayed on the version 1 row they had just
+    // deactivated. Checking the merge FORM cannot see that the insert path
+    // inherits nothing — so check the outcome instead. Some migration must
+    // write these keys onto version 2.
+    const writesOntoV2 = readdirSync(migrationsDir)
+      .filter((f) => f.endsWith('.sql'))
+      .some((f) => {
+        const sql = readStatements(f);
+        return (
+          sql.includes('station_mix_note') &&
+          /update\s+public\.model_coefficients/i.test(sql) &&
+          /version\s*=\s*2/.test(sql)
+        );
+      });
+
+    expect(
+      writesOntoV2,
+      'no migration carries station_mix_changed_at / station_mix_note onto the active v2 ' +
+        'coefficients — 0006’s annotation is stranded on the deactivated v1 rows',
+    ).toBe(true);
   });
 
   it('seeds every trainable location exactly once across all seed migrations', () => {

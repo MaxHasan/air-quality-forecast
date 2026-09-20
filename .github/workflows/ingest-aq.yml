@@ -27,6 +27,17 @@
 # idempotent over a trailing window, so drift is survivable — but not being run
 # at all is not, so we stay out of the crowd.
 #
+# MEASURED 2026-09-20: THE MARGIN ABOVE DID NOT SURVIVE CONTACT.
+# The paragraph two above is right about the mechanism and wrong about the
+# scale. GitHub started 5-7 of these a day for a week — not a dropped run here
+# and there, about three quarters of them — and every started run succeeded.
+# Jabodetabek settled at 9-11 hours a day, under the bar, exactly as predicted;
+# bekasi and jakarta-north fell below MIN_SCORED_DAYS_FOR_RANKING and stopped
+# ranking models on MAE at all. Staying off the hour was not enough, because
+# the drop is not concentrated on the hour.
+# The fix is to stop relying on the `schedule:` event: see
+# docs/runbooks/ingestion-scheduling.md. The schedule below stays as a fallback.
+#
 # The rollup runs in the same job rather than as a separate workflow, because it
 # only has work to do once new observations exist. `--days 3` recomputes today
 # plus the two days the ingestion catch-up window can revise.

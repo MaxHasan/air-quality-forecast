@@ -11,7 +11,7 @@
  * agree on slugs and timezones.
  */
 
-import type { AqSource, CountryCode, LocationSlug, StationNetwork, TimeZone } from './types';
+import type { AqSource, CountryCode, LocalDate, LocationSlug, StationNetwork, TimeZone } from './types';
 
 export interface LocationConfig {
   slug: LocationSlug;
@@ -49,19 +49,6 @@ export const LOCATIONS: readonly LocationConfig[] = [
     lon: 106.834,
     timezone: 'Asia/Jakarta',
     order: 1,
-    calibratedAtLaunch: true,
-  },
-  {
-    slug: 'jakarta-north',
-    name: 'Jakarta North',
-    shortName: 'Jkt North',
-    country: 'ID',
-    timezone: 'Asia/Jakarta',
-    // Centroid of Jakarta Utara, the coastal strip. Its one feed (KBN Marunda)
-    // sits at the eastern end, ~7 km away.
-    lat: -6.1214,
-    lon: 106.8827,
-    order: 2,
     calibratedAtLaunch: true,
   },
   {
@@ -182,6 +169,52 @@ export const LOCATIONS: readonly LocationConfig[] = [
   },
 ] as const;
 
+/**
+ * Locations that once existed and no longer do.
+ *
+ * Retirement is *declared* here rather than inferred from absence, for one
+ * practical reason: `fetchLocations` (src/lib/queries.ts) logs an error for any
+ * database slug missing from `LOCATIONS`, because normally that means the
+ * registry and the seed have drifted and something is broken. A deliberate
+ * retirement would trip that check on every request and teach the reader to
+ * ignore it.
+ *
+ * Nothing is deleted from the database. The rows stay: the observations are
+ * real air that was really measured, the predictions were really made, and
+ * `on delete cascade` means dropping the location would take all of it. A
+ * retired location is simply not offered to the reader and not worked by the
+ * ingestion jobs.
+ */
+export interface RetiredLocation {
+  slug: LocationSlug;
+  name: string;
+  /** Local date the decision was taken. */
+  retiredOn: LocalDate;
+  reason: string;
+}
+
+export const RETIRED_LOCATIONS: readonly RetiredLocation[] = [
+  {
+    slug: 'jakarta-north',
+    name: 'Jakarta North',
+    retiredOn: '2026-09-20',
+    reason:
+      'Its only feed in either network (waqi -531679, KBN Marunda, KLHK) reported healthily ' +
+      'through 2026-08-26 — 20-23 hours a day — and then stopped entirely. Swept both networks ' +
+      'on 2026-09-20: WAQI returns no fresh station within 25 km, and the AirGradient world map ' +
+      'has nothing in Jakarta Utara at all (nearest unseeded candidate is 27 km away, and to the ' +
+      'south). The registry comment on that station predicted this exactly: "If it goes quiet, ' +
+      'Jakarta North has nothing." Re-check both networks before assuming it must stay retired.',
+  },
+] as const;
+
+const RETIRED_SLUGS: ReadonlySet<string> = new Set(RETIRED_LOCATIONS.map((r) => r.slug));
+
+/** True for a slug this app deliberately no longer serves. */
+export function isRetiredLocation(slug: string): boolean {
+  return RETIRED_SLUGS.has(slug);
+}
+
 const LOCATION_BY_SLUG: Readonly<Record<LocationSlug, LocationConfig>> = Object.freeze(
   Object.fromEntries(LOCATIONS.map((l) => [l.slug, l])) as Record<LocationSlug, LocationConfig>,
 );
@@ -270,16 +303,6 @@ export const WAQI_STATIONS: readonly StationConfig[] = [
     source: 'waqi',
     sourceStationId: '-416842',
     name: 'Jakarta GBK',
-    network: 'klhk',
-  },
-  {
-    // Jakarta Utara's only feed, in either network. Verified live 2026-08-19:
-    // fresh iaqi.pm25, attributed to KLHK. If it goes quiet, Jakarta North has
-    // nothing — the same single-point-of-failure Bali used to have.
-    locationSlug: 'jakarta-north',
-    source: 'waqi',
-    sourceStationId: '-531679',
-    name: 'KBN Marunda, North Jakarta',
     network: 'klhk',
   },
   {
@@ -372,6 +395,18 @@ export const STALE_FEED_HOURS = 6;
 
 /** Consecutive days unseen before a station is flagged `is_active = false`. */
 export const DORMANT_STATION_DAYS = 14;
+
+/**
+ * Days since a location's newest scored day, past which `/models` says so.
+ *
+ * `model_accuracy` is a rolling 30-day window, so a location whose feed died
+ * last week keeps publishing an MAE computed from the days before it died —
+ * correctly computed, and describing a period that has ended. Two days of slack
+ * because scoring is inherently a day behind (a prediction cannot be scored
+ * until its target date has a rollup) and a single missed run should not
+ * decorate the page with a warning.
+ */
+export const STALE_SCORE_DAYS = 3;
 
 /**
  * Minimum distinct local hours before a day's average is allowed to score a

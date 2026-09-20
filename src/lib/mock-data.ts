@@ -593,6 +593,10 @@ const SCORED_DAYS: Readonly<Record<LocationSlug, number>> = {
   // below MIN_SCORED_DAYS_FOR_RANKING so the fixture exercises the
   // "calibrated but not yet ranked" state — a real combination the UI has to
   // handle and which no location previously showed.
+  // Retired 2026-09-20 (see RETIRED_LOCATIONS): the key stays because
+  // `Record<LocationSlug, number>` requires every slug in the union, and the
+  // union keeps retired slugs so RETIRED_LOCATIONS can name them. The mock
+  // builds forecasts from LOCATIONS, so this value is never read.
   'jakarta-north': 5,
   'jakarta-south': 6,
   'jakarta-west': 4,

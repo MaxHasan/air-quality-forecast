@@ -42,7 +42,7 @@
 
 import { getAnonClient, type Db } from './db';
 import { pickHeadlineModel, isCalibrating } from './headline';
-import { LOCATIONS, locationBySlug, MIN_SCORED_DAYS_FOR_RANKING } from './stations';
+import { LOCATIONS, isRetiredLocation, locationBySlug, MIN_SCORED_DAYS_FOR_RANKING } from './stations';
 import { addLocalDays, diffLocalDays, localDateRange, toLocalHourLabel, todayLocalDate } from './format';
 import { MODEL_FALLBACK_ORDER } from './types';
 import type {
@@ -254,8 +254,17 @@ async function fetchLocations(): Promise<LocationRow[]> {
 
   const known = rows.filter((r) => DISPLAY_ORDER.has(r.slug));
   if (known.length !== rows.length) {
-    const unknown = rows.filter((r) => !DISPLAY_ORDER.has(r.slug)).map((r) => r.slug);
-    console.error(`[data] locations has slug(s) absent from src/lib/stations.ts, skipped: ${unknown.join(', ')}`);
+    // A database slug missing from the registry is normally drift, and worth
+    // shouting about. A RETIRED one is the same shape and the opposite thing:
+    // the row is deliberately still there, holding history we chose not to
+    // delete. Logging it every request would train the reader to ignore this
+    // line, which is the only thing standing between real drift and silence.
+    const unknown = rows
+      .filter((r) => !DISPLAY_ORDER.has(r.slug) && !isRetiredLocation(r.slug))
+      .map((r) => r.slug);
+    if (unknown.length > 0) {
+      console.error(`[data] locations has slug(s) absent from src/lib/stations.ts, skipped: ${unknown.join(', ')}`);
+    }
   }
 
   return known.sort((a, b) => (DISPLAY_ORDER.get(a.slug) ?? 0) - (DISPLAY_ORDER.get(b.slug) ?? 0));

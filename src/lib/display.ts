@@ -8,7 +8,8 @@
  * scoring.
  */
 
-import type { HorizonDays, LocalDate, ModelName } from './types';
+import type { HorizonDays, LocalDate, ModelName, TimeZone } from './types';
+import { diffLocalDays, todayLocalDate } from './format';
 
 /** `YYYY-MM-DD` → e.g. `Mon, Aug 17`. Calendar-only: never applies a timezone
  * offset, because a `LocalDate` is already the calendar date for its location. */
@@ -140,4 +141,17 @@ export const TREND_PRESENTATION: Readonly<
 /** e.g. `2` -> "2 more scored days" for the /models empty state. */
 export function scoredDaysRemaining(n: number, minRequired: number): number {
   return Math.max(0, minRequired - n);
+}
+
+/**
+ * Whole days from a local date to today in `tz`, or `null` if either is
+ * unparseable. Negative for a future date.
+ *
+ * Presentation-only, per this file's contract: used to say how old a figure is,
+ * never to decide which bucket a reading belongs to.
+ */
+export function daysSinceLocalDate(localDate: LocalDate, tz: TimeZone, now: Date = new Date()): number | null {
+  const today = todayLocalDate(tz, now);
+  if (!today) return null;
+  return diffLocalDays(localDate, today);
 }

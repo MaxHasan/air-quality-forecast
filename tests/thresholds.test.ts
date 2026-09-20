@@ -15,7 +15,7 @@ import { defaultMinDays } from '@/lib/rolling';
 // Importing a script is safe here: fit-wind-model.ts guards its main() behind
 // an entrypoint check precisely so importing it does not run a calibration as
 // a side effect. See the note at the bottom of that file.
-import { SHIPPED_LAG_SPEC } from '../scripts/calibrate/fit-wind-model';
+import { SHIPPED_LAG_SPEC, TRAINABLE } from '../scripts/calibrate/fit-wind-model';
 
 describe('verdictFor', () => {
   it('treats bounds as inclusive', () => {
@@ -216,18 +216,45 @@ describe('migration SQL agrees with the shipped constants', () => {
     expect([...inSql].sort()).toEqual([...MODEL_FALLBACK_ORDER].sort());
   });
 
-  it('0009’s seeded lag literals equal the shipped fit spec', () => {
-    const sql = read('0009_rolling_lag_coefficients.sql');
+  /**
+   * Every migration that seeds `model_coefficients`, found rather than listed.
+   *
+   * 0009 seeded two locations and 0010 the other four, and the gap between
+   * them was not a typo — it was a hardcoded seed list that did not grow when
+   * jakarta-regions merged four more trainable locations. A test naming its
+   * migrations by hand has the same failure mode as the migration did, so
+   * these are discovered instead, and the coverage test below asks the
+   * question the file names cannot: is every trainable location seeded at all?
+   */
+  const seedMigrations = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => readStatements(f).includes('insert into public.model_coefficients'))
+    .sort();
+
+  /** The slugs a seed migration's `values (...)` list actually covers. */
+  const seededSlugs = (file: string): string[] =>
+    [...readStatements(file).matchAll(/\(\s*'([a-z0-9-]+)'\s*,\s*2\s*,/g)].map((m) => m[1]);
+
+  it('finds the seed migrations at all', () => {
+    // Guards the discovery above: if the insert statement is ever reworded,
+    // every test in this block would silently pass over an empty list.
+    expect(seedMigrations.length).toBeGreaterThan(0);
+  });
+
+  it.each(seedMigrations)('%s seeds lag literals equal to the shipped fit spec', (file) => {
+    const sql = read(file);
 
     const windows = [...sql.matchAll(/"lag_window_days":(\d+)/g)].map((m) => Number(m[1]));
     const minHours = [...sql.matchAll(/"lag_min_hours":(\d+)/g)].map((m) => Number(m[1]));
     const minDays = [...sql.matchAll(/"lag_min_days":(\d+)/g)].map((m) => Number(m[1]));
 
-    // Two seeded locations, so two of each — a missing one would be a row
-    // predict.ts refuses at runtime with no test having noticed.
-    expect(windows).toHaveLength(2);
-    expect(minHours).toHaveLength(2);
-    expect(minDays).toHaveLength(2);
+    // One of each per seeded row. A row missing one is a row predict.ts
+    // refuses at runtime with no test having noticed.
+    const rows = seededSlugs(file).length;
+    expect(rows).toBeGreaterThan(0);
+    expect(windows).toHaveLength(rows);
+    expect(minHours).toHaveLength(rows);
+    expect(minDays).toHaveLength(rows);
 
     for (const w of windows) expect(w).toBe(SHIPPED_LAG_SPEC.windowDays);
     for (const h of minHours) expect(h).toBe(SHIPPED_LAG_SPEC.minHours);
@@ -240,13 +267,13 @@ describe('migration SQL agrees with the shipped constants', () => {
     expect(SHIPPED_LAG_SPEC.minDays).toBe(defaultMinDays(SHIPPED_LAG_SPEC.windowDays));
   });
 
-  it('0009 seeds version 2 and declares the rolling specification', () => {
-    const sql = read('0009_rolling_lag_coefficients.sql');
+  it.each(seedMigrations)('%s seeds version 2 and declares the rolling specification', (file) => {
+    const sql = read(file);
     // Every seeded row must say which specification it is: that string is how
     // a reader tells a v1 row from a v2 one months later, and it is what
     // resolveLagSpec's refusal is protecting.
     const specs = [...sql.matchAll(/"specification":"([^"]+)"/g)].map((m) => m[1]);
-    expect(specs).toHaveLength(2);
+    expect(specs).toHaveLength(seededSlugs(file).length);
     for (const s of specs) expect(s).toBe('rolling_pm25_lag + same_day_wind');
 
     // The deactivate-then-insert order is forced by a non-deferred partial
@@ -257,13 +284,29 @@ describe('migration SQL agrees with the shipped constants', () => {
     );
   });
 
-  it('0009 preserves 0006’s annotations instead of replacing stats', () => {
-    const sql = readStatements('0009_rolling_lag_coefficients.sql');
+  it.each(seedMigrations)('%s preserves 0006’s annotations instead of replacing stats', (file) => {
+    const sql = readStatements(file);
     // `stats = excluded.stats` would wipe station_mix_changed_at off exactly
     // the two locations 0006 stamped it onto. Applying 0007 did that once.
     expect(sql).not.toMatch(/stats\s*=\s*excluded\.stats/);
     expect(sql).toMatch(/stats\s*=\s*\(coalesce\(model_coefficients\.stats/);
     expect(sql).toContain("- array['r2'");
+  });
+
+  it('seeds every trainable location exactly once across all seed migrations', () => {
+    const seeded = seedMigrations.flatMap(seededSlugs);
+
+    // The bug this test exists for: 0009 shipped seeding two of six, so
+    // jakarta-north, jakarta-south, jakarta-west and bekasi kept their v1
+    // coefficients — which predict.ts then refused, leaving them with no wind
+    // forecast at all. Nothing failed; the model just went quiet.
+    for (const { slug } of TRAINABLE) {
+      expect(seeded, `${slug} is trainable but no migration seeds v2 coefficients for it`).toContain(slug);
+    }
+
+    // And the reverse: a slug seeded twice means two migrations both claim to
+    // set the active row, and which one wins depends on apply order.
+    expect([...new Set(seeded)].sort()).toEqual([...seeded].sort());
   });
 
   it('no migration widens model_coefficients.model to rolling_mean', () => {

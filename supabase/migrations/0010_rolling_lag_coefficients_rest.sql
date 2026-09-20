@@ -1,0 +1,155 @@
+-- ===========================================================================
+-- 0010 — finish the v2 swap: the four TRAINABLE locations 0009 left behind.
+--
+-- APPLY ANY TIME AFTER 0009. There is no early/late hazard here: the code that
+-- reads these rows is already deployed, and 0009 already widened nothing this
+-- depends on. Until this runs, the four locations below are *worse off* than
+-- before the swap, which is why it should not wait long — see below.
+--
+-- ---------------------------------------------------------------------------
+-- What went wrong, and why it looked like nothing
+-- ---------------------------------------------------------------------------
+-- 0009 seeded v2 for jakarta-central and bsd only, and said so in its header:
+-- the other four TRAINABLE locations were left on v1 pending this follow-up.
+-- That was scoped when `main` carried two trainable locations; jakarta-regions
+-- merged first and brought four more, and the seed list did not grow with it.
+--
+-- The consequence is not a silent wrong answer — it is a silent absence.
+-- predict.ts refuses v1-shaped coefficients by design (it will not feed a
+-- rolling lag into a slope fitted on a single day), so from the first run
+-- after 0009 these four locations emitted NO wind_regression row at all:
+--
+--   ~ wind_regression: coefficients use pm25_lag but stats carries no
+--     lag_window_days — a v1 (single partial-day) fit. Refusing to feed a
+--     rolling lag into a slope that was not fitted on one; apply 0009.
+--
+-- Observed on run 35501574668 (2026-09-20) for jakarta-north, jakarta-south,
+-- jakarta-west and bekasi. The guard worked exactly as intended; this file is
+-- the other half it was waiting for.
+--
+-- ---------------------------------------------------------------------------
+-- The fit
+-- ---------------------------------------------------------------------------
+-- Same specification, same script, same archive, same gates as 0009 —
+-- `npm run calibrate -- --sql` on 2026-09-20, which fits all six TRAINABLE
+-- locations in one pass. The window was not re-chosen: complete_7 / h1 was
+-- settled by the variant sweep in docs/backtests/2026-09-rolling-lag.md, and
+-- re-deciding it per location would be fitting the choice to the noise.
+--
+-- All four pass the physics gate with room to spare:
+--
+--   jakarta-north   b_wind =  -7.33   R² 0.457   h1/h2/h3 MAE 7.3/7.3/7.3
+--   jakarta-south   b_wind =  -9.41   R² 0.469   h1/h2/h3 MAE 7.7/7.7/7.7
+--   jakarta-west    b_wind =  -8.52   R² 0.465   h1/h2/h3 MAE 8.4/8.4/8.4
+--   bekasi          b_wind =  -8.71   R² 0.459   h1/h2/h3 MAE 7.7/7.7/7.7
+--
+-- The same caveat as 0009 applies and is worth repeating rather than assuming
+-- remembered: those MAEs come from a backtest fed ERA5 *actuals* for the
+-- target day, i.e. a perfect wind forecast. Live skill is lower, and the gap
+-- grows with horizon. /models measures the real thing.
+--
+-- Note the `rolling_mean` column of each holdout blob: it beats the hybrid at
+-- every horizon at every one of these locations, as it did at the original
+-- two. That is a finding about the backtest's perfect wind, not a reason to
+-- crown it — but it is why rolling_mean is on the board being scored.
+--
+-- ---------------------------------------------------------------------------
+-- Why the statement order inside this file is forced (unchanged from 0009)
+-- ---------------------------------------------------------------------------
+-- `model_coefficients_single_active_idx` (0001_init.sql:176) is a partial
+-- UNIQUE index on (location_id, model) where is_active, and it is NOT
+-- deferrable. "Two active rows" is not a transient state this transaction may
+-- pass through — it aborts at the statement. Deactivate first, then insert
+-- active, in one transaction, so a failure leaves v1 active rather than
+-- leaving a location with no active coefficients at all.
+-- ---------------------------------------------------------------------------
+
+begin;
+
+-- ---------------------------------------------------------------------------
+-- 1. Deactivate every other wind_regression version, FIRST.
+-- ---------------------------------------------------------------------------
+update public.model_coefficients mc
+set is_active = false
+from public.locations l
+where l.id = mc.location_id
+  and mc.model = 'wind_regression'
+  and mc.is_active
+  and mc.version <> 2
+  and l.slug in ('jakarta-north', 'jakarta-south', 'jakarta-west', 'bekasi');
+
+-- ---------------------------------------------------------------------------
+-- 2. Seed v2 and make it active.
+--
+--    Joining `locations` on slug rather than hard-coding ids means an absent
+--    slug produces no row instead of a foreign-key error — the 0006 pattern.
+--    On a database where 0007 has not run, the three jakarta-* slugs simply
+--    do not match and this seeds bekasi alone, which is correct rather than
+--    broken.
+--
+--    Generated by scripts/calibrate/fit-wind-model.ts on 2026-09-20 from
+--    Nafas PM2.5 x ERA5 weather 2022-2023. Idempotent: re-running upserts v2.
+-- ---------------------------------------------------------------------------
+insert into public.model_coefficients (location_id, model, version, intercept, coef, stats, is_active)
+select l.id, 'wind_regression', v.version, v.intercept, v.coef, v.stats, true
+from (values
+  ('jakarta-north', 2, 31.463045, '{"pm25_lag":0.548718,"wind_speed_avg_ms":-7.327225}'::jsonb, '{"r2":0.457403,"adj_r2":0.45586,"n":706,"rmse":9.2293,"period_start":"2022-01-01","period_end":"2023-12-14","source":"nafas-pm25 x era5-weather 2022-2023","specification":"rolling_pm25_lag + same_day_wind","lag_window_days":7,"lag_min_hours":12,"lag_min_days":4,"fit_geometry":"h1","holdout":{"h1":{"hybrid":7.29,"persistence":6.46,"rolling_mean":5.3},"h2":{"hybrid":7.3,"persistence":7.25,"rolling_mean":5.4},"h3":{"hybrid":7.33,"persistence":7.16,"rolling_mean":5.5}}}'::jsonb),
+  ('jakarta-south', 2, 35.534078, '{"pm25_lag":0.487894,"wind_speed_avg_ms":-9.407733}'::jsonb, '{"r2":0.46907,"adj_r2":0.46756,"n":706,"rmse":9.4765,"period_start":"2022-01-01","period_end":"2023-12-14","source":"nafas-pm25 x era5-weather 2022-2023","specification":"rolling_pm25_lag + same_day_wind","lag_window_days":7,"lag_min_hours":12,"lag_min_days":4,"fit_geometry":"h1","holdout":{"h1":{"hybrid":7.65,"persistence":7.45,"rolling_mean":6.24},"h2":{"hybrid":7.67,"persistence":8.05,"rolling_mean":6.48},"h3":{"hybrid":7.75,"persistence":7.69,"rolling_mean":6.4}}}'::jsonb),
+  ('jakarta-west', 2, 33.957703, '{"pm25_lag":0.551236,"wind_speed_avg_ms":-8.518524}'::jsonb, '{"r2":0.46519,"adj_r2":0.463668,"n":706,"rmse":9.6216,"period_start":"2022-01-01","period_end":"2023-12-14","source":"nafas-pm25 x era5-weather 2022-2023","specification":"rolling_pm25_lag + same_day_wind","lag_window_days":7,"lag_min_hours":12,"lag_min_days":4,"fit_geometry":"h1","holdout":{"h1":{"hybrid":8.38,"persistence":7.98,"rolling_mean":6.64},"h2":{"hybrid":8.38,"persistence":8.78,"rolling_mean":6.8},"h3":{"hybrid":8.42,"persistence":8.27,"rolling_mean":6.69}}}'::jsonb),
+  ('bekasi', 2, 35.940724, '{"pm25_lag":0.541516,"wind_speed_avg_ms":-8.710706}'::jsonb, '{"r2":0.459166,"adj_r2":0.457627,"n":706,"rmse":10.2287,"period_start":"2022-01-01","period_end":"2023-12-14","source":"nafas-pm25 x era5-weather 2022-2023","specification":"rolling_pm25_lag + same_day_wind","lag_window_days":7,"lag_min_hours":12,"lag_min_days":4,"fit_geometry":"h1","holdout":{"h1":{"hybrid":7.66,"persistence":6.8,"rolling_mean":5.65},"h2":{"hybrid":7.7,"persistence":7.34,"rolling_mean":5.86},"h3":{"hybrid":7.75,"persistence":7.26,"rolling_mean":6.07}}}'::jsonb)
+) as v (location_slug, version, intercept, coef, stats)
+join public.locations l on l.slug = v.location_slug
+on conflict (location_id, model, version) do update set
+  intercept = excluded.intercept,
+  coef      = excluded.coef,
+  -- Subtract this script's own keys, then merge — the same contract as 0009.
+  -- A plain `stats = excluded.stats` would delete annotations other migrations
+  -- stamped here (0006's station_mix_changed_at); a plain `||` would let a
+  -- measured key this script stops emitting survive forever as if current.
+  stats     = (coalesce(model_coefficients.stats, '{}'::jsonb) - array['r2', 'adj_r2', 'n', 'rmse', 'period_start', 'period_end', 'source', 'specification', 'holdout', 'lag_window_days', 'lag_min_hours', 'lag_min_days', 'fit_geometry']::text[]) || excluded.stats,
+  is_active = excluded.is_active;
+
+-- ---------------------------------------------------------------------------
+-- 3. Annotate the switch, as 0009 did for the first two.
+--
+--    These four crossed from v1 to v2 on a different date than jakarta-central
+--    and bsd, and spent the days between with no wind_regression row at all.
+--    A 30-day model_accuracy window spanning that gap therefore has both a
+--    specification change AND a hole in it. Stamping the date is what lets a
+--    future reader tell the hole from a model that simply scored badly.
+-- ---------------------------------------------------------------------------
+update public.model_coefficients mc
+set stats = mc.stats
+  || jsonb_build_object(
+       'lag_definition_changed_at', current_date,
+       'lag_definition_note',
+         'pm25_lag changed from a single day (v1) to the mean of complete days in '
+         || '[issue-7, issue-1] (v2, migration 0010), and the coefficients were refitted '
+         || 'on that definition. v1 was also fed today''s PARTIAL day at inference, which '
+         || 'it was never fitted on. This location was seeded one step after 0009 and '
+         || 'emitted no wind_regression row in between, so a window spanning that date '
+         || 'has a gap as well as a specification change. '
+         || 'See docs/backtests/2026-09-rolling-lag.md.'
+     )
+from public.locations l
+where l.id = mc.location_id
+  and mc.model = 'wind_regression'
+  and mc.version = 2
+  and l.slug in ('jakarta-north', 'jakarta-south', 'jakarta-west', 'bekasi');
+
+commit;
+
+-- ---------------------------------------------------------------------------
+-- Verification — expect SIX rows now, all version 2, all is_active, all
+-- carrying lag_window_days = 7. jakarta-central and bsd must still show the
+-- station_mix_note 0006 stamped on them; if it is null, a stats merge
+-- somewhere dropped an annotation it promised to keep.
+-- ---------------------------------------------------------------------------
+-- select l.slug, mc.version, mc.is_active,
+--        mc.stats ->> 'specification'    as spec,
+--        mc.stats ->> 'lag_window_days'  as window_days,
+--        mc.stats ->> 'station_mix_note' as mix_note
+-- from public.model_coefficients mc
+-- join public.locations l on l.id = mc.location_id
+-- where mc.model = 'wind_regression' and mc.is_active
+-- order by l.slug;

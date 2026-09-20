@@ -3,9 +3,8 @@ import type { ActivityKey, LocationForecast } from '@/lib/types';
 import { ACTIVITY_THRESHOLDS } from '@/lib/thresholds';
 import { activityVerdictsFor } from '@/lib/verdicts';
 import { AqiPill } from './AqiPill';
-import { ModelStrip } from './ModelStrip';
-import { VerdictBadge, VerdictBadgeUnknown } from './VerdictBadge';
-import { TREND_PRESENTATION, formatLocalDateLabel, formatPm25, pm25Trend } from '@/lib/display';
+import { VerdictBadge, VerdictBadgeAll, VerdictBadgeUnknown } from './VerdictBadge';
+import { TREND_PRESENTATION, formatLongDateLabel, formatPm25, pm25Trend } from '@/lib/display';
 
 interface LocationCardProps {
   forecast: LocationForecast;
@@ -13,9 +12,20 @@ interface LocationCardProps {
 }
 
 export function LocationCard({ forecast, visibleActivities }: LocationCardProps) {
-  const { location, headline, models, target_date, calibrating, latest_actual, today_prediction } = forecast;
+  const { location, headline, target_date, calibrating, latest_actual, today_prediction } = forecast;
   const verdicts = activityVerdictsFor(headline?.predicted_pm25 ?? null);
   const shown = visibleActivities ?? ACTIVITY_THRESHOLDS.map((t) => t.key);
+  const shownThresholds = ACTIVITY_THRESHOLDS.filter((t) => shown.includes(t.key));
+  const shownVerdicts = shownThresholds.map((t) => verdicts?.find((v) => v.activity === t.key) ?? null);
+
+  // When every activity on show lands on the same verdict — the common case on
+  // a genuinely bad or genuinely clear day — the three rows repeat one fact and
+  // the card turns into a block of one colour. Collapse them into a single
+  // badge instead. The `?.` comparison also folds the all-unknown case, where
+  // every entry is null: `activityVerdictsFor` returns all verdicts or none, so
+  // there is no partial state to mishandle.
+  const sharedVerdict = shownVerdicts[0]?.verdict ?? null;
+  const collapse = shownThresholds.length > 1 && shownVerdicts.every((v) => (v?.verdict ?? null) === sharedVerdict);
 
   // Today's reference level: the observed rollup when the stations have
   // reported, else the value today was forecast at. The observed figure wins
@@ -29,82 +39,22 @@ export function LocationCard({ forecast, visibleActivities }: LocationCardProps)
     <Link
       href={`/location/${location.slug}`}
       data-slug={location.slug}
-      className="group flex flex-col gap-3 rounded-2xl border border-surface-border bg-surface p-4 shadow-sm transition hover:border-accent hover:shadow-md sm:p-5"
+      className="group @container flex flex-col gap-4 rounded-2xl border border-surface-border bg-surface p-4 shadow-sm transition hover:border-accent hover:shadow-md sm:p-5"
     >
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h2 className="text-lg font-semibold">{location.name}</h2>
-          <p className="text-xs text-muted">
-            Forecast for {formatLocalDateLabel(target_date)}
-            {calibrating && (
-              <span className="ml-1.5 inline-flex items-center rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
-                Calibrating
-              </span>
-            )}
-          </p>
-        </div>
-        <AqiPill pm25={headline?.predicted_pm25 ?? null} />
-      </div>
-
-      {/* Today ↔ tomorrow, side by side: level and direction in one glance.
-          Tomorrow stays visually dominant — it is the decision the card exists
-          for; today is the anchor that makes the number mean something. */}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1.4fr)] items-end gap-3">
-        <div className="flex min-w-0 flex-col">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-muted">Today</span>
-          {todayValue !== null ? (
-            <>
-              <span className="text-xl font-semibold tabular-nums text-muted">
-                {formatPm25(todayValue)}
-                <span className="ml-1 text-xs font-normal">µg/m³</span>
-              </span>
-              <span className="truncate text-[11px] text-muted">
-                {latest_actual
-                  ? `so far · ${latest_actual.hours_count}h, ${latest_actual.station_count} station${latest_actual.station_count === 1 ? '' : 's'}`
-                  : 'forecast — no reading yet'}
-              </span>
-              {latest_actual && today_prediction && (
-                <span className="truncate text-[11px] text-muted">
-                  called at {formatPm25(today_prediction.predicted_pm25)}
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-sm text-muted">no reading</span>
+      <div>
+        <h2 className="text-lg font-semibold">{location.name}</h2>
+        <p className="text-sm text-muted">
+          {/* The date carries the whole promise of the card — this is tomorrow,
+              decided tonight — so it is spelled out and set above the caption
+              around it rather than reading as small print. */}
+          Forecast for{' '}
+          <span className="font-semibold text-foreground">{formatLongDateLabel(target_date)}</span>
+          {calibrating && (
+            <span className="ml-1.5 inline-flex items-center rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+              Calibrating
+            </span>
           )}
-        </div>
-
-        {trendView ? (
-          <span
-            className={`pb-1 text-lg font-semibold ${trendView.toneClass}`}
-            role="img"
-            aria-label={`Trend: ${trendView.label}`}
-            title={`Tomorrow vs today: ${trendView.label}`}
-          >
-            {trendView.glyph}
-          </span>
-        ) : (
-          <span aria-hidden className="pb-1 text-lg text-muted">
-            ·
-          </span>
-        )}
-
-        <div className="flex min-w-0 flex-col">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-muted">Tomorrow</span>
-          {headline ? (
-            <>
-              <span className="text-4xl font-bold tabular-nums">
-                {formatPm25(headline.predicted_pm25)}
-                <span className="ml-1 text-sm font-normal text-muted">µg/m³</span>
-              </span>
-              {headline.horizon_days > 1 && (
-                <span className="text-[11px] text-muted">issued {headline.horizon_days} days out</span>
-              )}
-            </>
-          ) : (
-            <span className="text-sm text-muted">No forecast yet</span>
-          )}
-        </div>
+        </p>
       </div>
 
       {calibrating && (
@@ -114,21 +64,65 @@ export function LocationCard({ forecast, visibleActivities }: LocationCardProps)
         </p>
       )}
 
-      <ModelStrip models={models} headlineModel={headline?.model ?? null} />
+      {/* The verdicts are the card's reason to exist: is tomorrow safe for the
+          run, the swim, and the stroller walk? Everything else is reference
+          material underneath. Full-size badges, one column on narrow screens
+          so each stays legible, three across once there's room.
+          A container query, not a viewport breakpoint: the card grid above
+          this one goes to two and then three columns as the page widens, so
+          the card itself can end up *narrower* on a wide screen than on a
+          medium one, and a viewport-based `sm:` would cram three long labels
+          into a slim column right when the outer grid picks three-up. */}
+      {collapse ? (
+        <VerdictBadgeAll
+          icons={shownThresholds.map((t) => t.icon)}
+          label={
+            shownThresholds.length === ACTIVITY_THRESHOLDS.length
+              ? 'All three activities'
+              : shownThresholds.map((t) => t.shortLabel).join(' & ')
+          }
+          verdict={sharedVerdict}
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-2 @sm:grid-cols-3">
+          {shownThresholds.map((t, i) => {
+            const v = shownVerdicts[i];
+            return v ? (
+              <VerdictBadge key={t.key} verdict={v} />
+            ) : (
+              <VerdictBadgeUnknown key={t.key} activityLabel={t.shortLabel} icon={t.icon} />
+            );
+          })}
+        </div>
+      )}
 
-      <div className="flex flex-wrap gap-2 pt-1">
-        {ACTIVITY_THRESHOLDS.filter((t) => shown.includes(t.key)).map((t) => {
-          const v = verdicts?.find((x) => x.activity === t.key) ?? null;
-          return v ? (
-            <VerdictBadge key={t.key} verdict={v} compact />
+      {/* One light reference line: tomorrow's EPA category and today's level
+          with its trend glyph. The current AQI is context now, not the
+          headline — the verdicts above already answered the question. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+        <AqiPill pm25={headline?.predicted_pm25 ?? null} />
+        {!headline && <span>No forecast yet</span>}
+        <span className="flex items-center gap-1">
+          Today:
+          {todayValue !== null ? (
+            <span className="font-medium tabular-nums text-foreground">{formatPm25(todayValue)} µg/m³</span>
           ) : (
-            <VerdictBadgeUnknown key={t.key} activityLabel={t.shortLabel} icon={t.icon} compact />
-          );
-        })}
+            <span>no reading</span>
+          )}
+          {trendView && (
+            <span
+              className={`font-semibold ${trendView.toneClass}`}
+              role="img"
+              aria-label={`Trend: ${trendView.label}`}
+              title={`Tomorrow vs today: ${trendView.label}`}
+            >
+              {trendView.glyph}
+            </span>
+          )}
+        </span>
       </div>
 
-      {/* The observed-so-far detail lives in the Today column now; this line
-          only appears when there is nothing measured to show there. */}
+      {/* This line only appears when there is nothing measured to show above. */}
       {!latest_actual && (
         <p className="text-[11px] text-muted">No ground-truth reading today — station feed is behind.</p>
       )}

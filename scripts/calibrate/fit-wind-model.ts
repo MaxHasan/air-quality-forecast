@@ -1049,7 +1049,7 @@ function decideVariant(reports: VariantLocationReport[]): {
  * The remaining unused satellites -- bogor, depok, tangerang -- have archives
  * but no location, which is the reverse problem and a much easier one.
  */
-const TRAINABLE: { slug: LocationSlug; file: string }[] = [
+export const TRAINABLE: { slug: LocationSlug; file: string }[] = [
   { slug: 'jakarta-central', file: 'nafas_central_jakarta.csv' },
   { slug: 'jakarta-north', file: 'nafas_north_jakarta.csv' },
   { slug: 'jakarta-south', file: 'nafas_south_jakarta.csv' },

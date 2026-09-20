@@ -41,11 +41,12 @@ export default function AboutPage() {
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Three models, one answer</h2>
+        <h2 className="text-lg font-semibold">Four models, one answer</h2>
         <p className="text-sm leading-relaxed text-muted">
-          Rather than trust a single predictor, every location gets three independent forecasts, scored daily against
-          what actually happened. The headline number on each card is whichever model has the lowest error over the
-          trailing 30 days — see{' '}
+          Rather than trust a single predictor, every location gets several independent forecasts, scored daily
+          against what actually happened. None of them uses the day in progress: a forecast issued this evening is
+          built from days that have finished, so it is never flattered by hours it has already seen. The headline
+          number on each card is whichever model has the lowest error over the trailing 30 days — see{' '}
           <a href="/models" className="underline hover:text-accent">
             model accuracy
           </a>{' '}

@@ -381,3 +381,24 @@ export const MIN_HOURS_FOR_SCORING = 12;
 
 /** Scored days needed before MAE is trusted to pick the headline model. */
 export const MIN_SCORED_DAYS_FOR_RANKING = 7;
+
+/**
+ * Calendar span of the `rolling_mean` model's window, in days back from today.
+ *
+ * Resolved INDEPENDENTLY of the wind model's lag window, which predict.ts reads
+ * from the coefficient row's `stats.lag_window_days`. They happen to agree —
+ * both are 7, and the 2026-09 backtest chose 7 for both reasons at once — but
+ * they are answers to different questions and must not share a constant:
+ *
+ *   - the wind model's window is a property of a FIT. Change it and b_lag is
+ *     wrong until the model is refitted, which is why it travels with the
+ *     coefficients rather than living in the code.
+ *   - `rolling_mean` has no fitted coefficients at all, which is exactly what
+ *     lets it run for Bali and the five Singapore regions, where there is no
+ *     coefficient row to read a window from. Its window is a product choice.
+ *
+ * Tying them to one constant would mean a location with no model could not have
+ * a rolling mean, or that refitting the wind model silently redefined a second
+ * model that was never refitted. See docs/backtests/2026-09-rolling-lag.md.
+ */
+export const ROLLING_MEAN_WINDOW_DAYS = 7;

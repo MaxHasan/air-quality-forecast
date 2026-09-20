@@ -1,10 +1,20 @@
 # ============================================================================
 # predict-score — the daily forecast run.
 #
-# 12:37 UTC = 19:37 WIB / 20:37 WITA & SGT: late enough in the local day that
-# today's observed average is nearly complete (it is the persistence anchor and
-# the regression's lag term), early enough that tomorrow's call is on the user's
-# phone before bedtime, when the "can I run in the morning?" decision is made.
+# 12:37 UTC = 19:37 WIB / 20:37 WITA & SGT: early enough that tomorrow's call is
+# on the user's phone before bedtime, when the "can I run in the morning?"
+# decision is made.
+#
+# It used to say the hour was chosen so today's observed average would be nearly
+# complete, "because it is the persistence anchor and the regression's lag
+# term". That stopped being true in 2026-09 and was the bug: predict.ts read
+# today's ~19-hour partial as the anchor while the regression's slope had been
+# fitted on complete days. Both models now use complete days only, so the time
+# of day no longer decides what the forecast is built from.
+#
+# The rollup -> predict ORDER still matters, for a different reason: the rollup
+# finalises YESTERDAY's actual. Predict needs that complete day as its newest
+# input, and `prediction_scores` needs it to score the calls made against it.
 #
 # ---------------------------------------------------------------------------
 # There is no scoring step, and that is by design

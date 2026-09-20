@@ -5,6 +5,7 @@ const MODEL_DOT: Readonly<Record<ModelName, string>> = {
   wind_regression: 'bg-[var(--chart-pm25)]',
   cams: 'bg-[var(--chart-wind)]',
   persistence: 'bg-muted',
+  rolling_mean: 'bg-[var(--chart-alt)]',
 };
 
 interface ModelStripProps {

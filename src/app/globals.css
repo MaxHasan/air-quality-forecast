@@ -22,6 +22,11 @@
 
   --chart-pm25: #0d9488;
   --chart-wind: #6366f1;
+  /* Fourth series (rolling_mean). Amber, so it separates from the teal and the
+     indigo by hue rather than only by lightness — the forecast fan can show all
+     four at once. `persistence` deliberately stays on --muted: it is the naive
+     benchmark and should recede. */
+  --chart-alt: #b45309;
   --chart-grid: #e2e8f0;
 }
 
@@ -70,6 +75,9 @@
 
     --chart-pm25: #2dd4bf;
     --chart-wind: #a5b4fc;
+    /* Lifted well above the light-mode amber: #b45309 on a dark ground reads
+       as muddy brown and loses against --muted. */
+    --chart-alt: #fbbf24;
     --chart-grid: #253147;
   }
 }

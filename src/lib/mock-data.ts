@@ -25,7 +25,13 @@
  */
 
 import { toLocalHour, toLocalHourLabel, todayLocalDate, tomorrowLocalDate, addLocalDays } from './format';
-import { ALL_STATIONS, LOCATIONS, locationBySlug, MIN_SCORED_DAYS_FOR_RANKING } from './stations';
+import {
+  ALL_STATIONS,
+  LOCATIONS,
+  locationBySlug,
+  MIN_SCORED_DAYS_FOR_RANKING,
+  ROLLING_MEAN_WINDOW_DAYS,
+} from './stations';
 import { pickHeadlineModel, isCalibrating } from './headline';
 import { MODEL_FALLBACK_ORDER } from './types';
 import type {
@@ -485,11 +491,26 @@ function buildDailySeries(slug: LocationSlug): DailySeries {
     forecast.push({ local_date: localDate, actual_pm25: null, wind_speed_avg_ms: round1(wind), predicted });
   }
 
-  // Persistence: today's running average carried forward unchanged across all horizons —
-  // deliberately naive, which is the point of shipping it as the benchmark to beat.
-  const lastKnownActual = [...history].reverse().find((d) => d.actual_pm25 !== null)?.actual_pm25 ?? null;
+  // The two coefficient-free models. Both carry one number forward unchanged
+  // across all horizons — deliberately naive, which is the point of shipping
+  // them as the benchmarks to beat — and neither uses the day in progress.
+  //
+  // `history` here ends at today, so `.slice(0, -1)` is what "complete days
+  // only" means in the fixture: the same exclusion selectAnchors applies in
+  // production, which is the behaviour this mock has to keep telling the truth
+  // about.
+  const completeDays = history.slice(0, -1).filter((d) => d.actual_pm25 !== null);
+  const lastCompleteActual = completeDays.length > 0 ? completeDays[completeDays.length - 1].actual_pm25 : null;
+
+  const windowDays = completeDays.slice(-ROLLING_MEAN_WINDOW_DAYS);
+  const rollingMean =
+    windowDays.length > 0
+      ? round1(windowDays.reduce((s, d) => s + (d.actual_pm25 as number), 0) / windowDays.length)
+      : null;
+
   for (const f of forecast) {
-    if (lastKnownActual !== null) f.predicted.persistence = lastKnownActual;
+    if (lastCompleteActual !== null) f.predicted.persistence = lastCompleteActual;
+    if (rollingMean !== null) f.predicted.rolling_mean = rollingMean;
   }
 
   const todayPoint = history[history.length - 1];
@@ -531,17 +552,36 @@ function buildDailySeries(slug: LocationSlug): DailySeries {
  * because a mock that quietly promises a win the real model does not deliver sets
  * expectations that production then has to disappoint. The per-horizon winner
  * selection in `model_accuracy` is what turns the crossover into an advantage —
- * which is precisely why all three models are shipped and scored.
+ * which is precisely why all four models are shipped and scored.
+ *
+ * -------------------------------------------------------------------------
+ * REVISED 2026-09, and the revision is the interesting part
+ * -------------------------------------------------------------------------
+ * The 6.29 above was measured with `persistence` scored as the COMPLETE mean
+ * of the issue day — a day only 19 hours old when the forecast goes out, whose
+ * complete mean nothing could ever have had. Every v1 holdout number was
+ * optimistic for every model in the same way. Rescored honestly (last complete
+ * day) and with the rolling lag in place, the numbers below come from
+ * docs/backtests/2026-09-rolling-lag.md, Jakarta Central:
  *
  *            h=1     h=2     h=3
- *   persist.  6.3     8.3    11.0     best close in, decays fastest
- *   wind      7.4     7.5     7.5     nearly flat — overtakes from h=2
+ *   rolling   6.1     6.3     6.3     smoothed level — best at every horizon
+ *   persist.  6.9     8.1     7.5     strong close in, decays with horizon
+ *   wind      8.1     8.1     8.2     nearly flat, and no longer the winner
  *   cams      8.6     9.4    10.2     coarse 40 km grid throughout
+ *
+ * The h1/h2 crossover story survives and now has a second half: persistence
+ * decays with horizon while the wind model holds, so wind still overtakes
+ * persistence by h=2 — but a plain 7-day mean beats both throughout. That is
+ * the truth the backtest found, so it is the truth the fixtures tell.
  */
 const ACCURACY_TIER: Readonly<Record<ModelName, { baseMae: number; growth: number; baseRmseMult: number }>> = {
-  wind_regression: { baseMae: 7.4, growth: 1.01, baseRmseMult: 1.28 },
+  wind_regression: { baseMae: 8.1, growth: 1.01, baseRmseMult: 1.28 },
   cams: { baseMae: 8.6, growth: 1.09, baseRmseMult: 1.22 },
-  persistence: { baseMae: 6.3, growth: 1.32, baseRmseMult: 1.2 },
+  persistence: { baseMae: 6.9, growth: 1.21, baseRmseMult: 1.2 },
+  // Flattest of the four: a 7-day mean barely changes between issue dates one
+  // day apart, so its error hardly grows with horizon.
+  rolling_mean: { baseMae: 6.1, growth: 1.02, baseRmseMult: 1.18 },
 };
 
 /** Scored-day counts per location — the thing that gates whether MAE is trustworthy. */
@@ -566,9 +606,19 @@ const SCORED_DAYS: Readonly<Record<LocationSlug, number>> = {
   'sg-west': 0, // live outage — no scored days at all; absent from the view entirely
 };
 
+/**
+ * NOT compiler-enforced — hand-built arrays, not a `Record<ModelName, …>`.
+ *
+ * `rolling_mean` needs no fitted coefficients, so unlike `wind_regression` it
+ * is present for EVERY location, Bali and the five Singapore regions included.
+ * That asymmetry is the whole reason the fourth model exists: those six
+ * locations previously had only `cams` and a naive benchmark.
+ */
 function modelsForLocation(slug: LocationSlug): ModelName[] {
   const cfg = locationBySlug(slug);
-  return cfg?.calibratedAtLaunch ? ['wind_regression', 'cams', 'persistence'] : ['cams', 'persistence'];
+  return cfg?.calibratedAtLaunch
+    ? ['wind_regression', 'cams', 'persistence', 'rolling_mean']
+    : ['cams', 'persistence', 'rolling_mean'];
 }
 
 let cachedAccuracy: ModelAccuracyRow[] | null = null;

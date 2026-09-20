@@ -14,12 +14,20 @@ const MODEL_COLOR: Readonly<Record<ModelName, string>> = {
   wind_regression: 'var(--chart-pm25)',
   cams: 'var(--chart-wind)',
   persistence: 'var(--muted)',
+  rolling_mean: 'var(--chart-alt)',
 };
 
+/**
+ * Dash is a second, non-colour channel carrying the same distinction, so the
+ * four lines stay separable in greyscale and for the ~8% of men with a
+ * red-green deficiency. Each pattern is visibly different at chart scale
+ * rather than merely a different pair of numbers.
+ */
 const MODEL_DASH: Readonly<Record<ModelName, string>> = {
   wind_regression: '0',
   cams: '5 3',
   persistence: '2 3',
+  rolling_mean: '8 3 2 3',
 };
 
 /**

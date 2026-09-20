@@ -9,7 +9,13 @@ import {
   thresholdFor,
   verdictFor,
 } from '@/lib/thresholds';
-import { ALL_STATIONS, LOCATIONS } from '@/lib/stations';
+import { ALL_STATIONS, LOCATIONS, MIN_HOURS_FOR_SCORING } from '@/lib/stations';
+import { MODEL_FALLBACK_ORDER } from '@/lib/types';
+import { defaultMinDays } from '@/lib/rolling';
+// Importing a script is safe here: fit-wind-model.ts guards its main() behind
+// an entrypoint check precisely so importing it does not run a calibration as
+// a side effect. See the note at the bottom of that file.
+import { SHIPPED_LAG_SPEC } from '../scripts/calibrate/fit-wind-model';
 
 describe('verdictFor', () => {
   it('treats bounds as inclusive', () => {
@@ -159,6 +165,114 @@ describe('stations.ts agrees with the seed migrations', () => {
         expect(l.lat).toBeLessThan(1.5);
         expect(l.lon).toBeGreaterThan(103);
         expect(l.lon).toBeLessThan(104.2);
+      }
+    }
+  });
+});
+
+/**
+ * Drift checks between the shipped TypeScript constants and the migration SQL
+ * Max applies by hand in the Supabase SQL editor.
+ *
+ * These two artefacts cannot import from each other, so nothing but a test
+ * keeps them in step — and both failure modes are silent rather than loud. A
+ * model in `MODEL_FALLBACK_ORDER` but missing from 0008's CHECK fails the
+ * nightly upsert, which throws and loses EVERY model's predictions for that
+ * run (scripts/lib/db.ts). A lag constant that disagrees with the seeded
+ * `stats` is the train/inference mismatch this branch removes, coming back
+ * through the back door.
+ */
+describe('migration SQL agrees with the shipped constants', () => {
+  const migrationsDir = fileURLToPath(new URL('../supabase/migrations/', import.meta.url));
+  const read = (file: string): string => readFileSync(join(migrationsDir, file), 'utf8');
+
+  /**
+   * The file with `-- …` line comments removed.
+   *
+   * Needed for the negative assertions below. These migrations document the
+   * wrong way to do a thing right above the right way — 0009's header spells
+   * out `stats = excluded.stats` in order to explain why it must not be used —
+   * so a naive search finds the warning and reports it as the fault.
+   */
+  const readStatements = (file: string): string =>
+    read(file)
+      .split('\n')
+      .filter((line) => !/^\s*--/.test(line))
+      .join('\n');
+
+  it('0008’s predictions.model CHECK lists exactly MODEL_FALLBACK_ORDER', () => {
+    const sql = read('0008_rolling_mean_model.sql');
+    const match = /add constraint predictions_model_check\s*\n?\s*check \(model in \(([^)]*)\)\)/i.exec(sql);
+    expect(match, 'could not find the predictions.model CHECK in 0008').not.toBeNull();
+
+    const inSql = (match as RegExpExecArray)[1]
+      .split(',')
+      .map((s) => s.trim().replace(/^'|'$/g, ''))
+      .filter(Boolean);
+
+    // Exactly the same members, caught in BOTH directions. Sorted so the
+    // CHECK's order (arbitrary) is not confused with MODEL_FALLBACK_ORDER's
+    // (meaningful — it is the cold-start preference and the render order).
+    expect([...inSql].sort()).toEqual([...MODEL_FALLBACK_ORDER].sort());
+  });
+
+  it('0009’s seeded lag literals equal the shipped fit spec', () => {
+    const sql = read('0009_rolling_lag_coefficients.sql');
+
+    const windows = [...sql.matchAll(/"lag_window_days":(\d+)/g)].map((m) => Number(m[1]));
+    const minHours = [...sql.matchAll(/"lag_min_hours":(\d+)/g)].map((m) => Number(m[1]));
+    const minDays = [...sql.matchAll(/"lag_min_days":(\d+)/g)].map((m) => Number(m[1]));
+
+    // Two seeded locations, so two of each — a missing one would be a row
+    // predict.ts refuses at runtime with no test having noticed.
+    expect(windows).toHaveLength(2);
+    expect(minHours).toHaveLength(2);
+    expect(minDays).toHaveLength(2);
+
+    for (const w of windows) expect(w).toBe(SHIPPED_LAG_SPEC.windowDays);
+    for (const h of minHours) expect(h).toBe(SHIPPED_LAG_SPEC.minHours);
+    for (const d of minDays) expect(d).toBe(SHIPPED_LAG_SPEC.minDays);
+
+    // minHours is MIN_HOURS_FOR_SCORING, not an independent number: the bar a
+    // day must clear to be an input is the same bar it must clear to score a
+    // model against.
+    expect(SHIPPED_LAG_SPEC.minHours).toBe(MIN_HOURS_FOR_SCORING);
+    expect(SHIPPED_LAG_SPEC.minDays).toBe(defaultMinDays(SHIPPED_LAG_SPEC.windowDays));
+  });
+
+  it('0009 seeds version 2 and declares the rolling specification', () => {
+    const sql = read('0009_rolling_lag_coefficients.sql');
+    // Every seeded row must say which specification it is: that string is how
+    // a reader tells a v1 row from a v2 one months later, and it is what
+    // resolveLagSpec's refusal is protecting.
+    const specs = [...sql.matchAll(/"specification":"([^"]+)"/g)].map((m) => m[1]);
+    expect(specs).toHaveLength(2);
+    for (const s of specs) expect(s).toBe('rolling_pm25_lag + same_day_wind');
+
+    // The deactivate-then-insert order is forced by a non-deferred partial
+    // unique index. If an edit ever reverses it the migration aborts on a live
+    // database; this catches it first.
+    expect(sql.indexOf('set is_active = false')).toBeLessThan(
+      sql.indexOf('insert into public.model_coefficients'),
+    );
+  });
+
+  it('0009 preserves 0006’s annotations instead of replacing stats', () => {
+    const sql = readStatements('0009_rolling_lag_coefficients.sql');
+    // `stats = excluded.stats` would wipe station_mix_changed_at off exactly
+    // the two locations 0006 stamped it onto. Applying 0007 did that once.
+    expect(sql).not.toMatch(/stats\s*=\s*excluded\.stats/);
+    expect(sql).toMatch(/stats\s*=\s*\(coalesce\(model_coefficients\.stats/);
+    expect(sql).toContain("- array['r2'");
+  });
+
+  it('no migration widens model_coefficients.model to rolling_mean', () => {
+    // rolling_mean has no fitted coefficients — that is exactly what lets it
+    // run for Bali and Singapore, where there is nothing to fit on.
+    for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith('.sql'))) {
+      const sql = readStatements(file);
+      for (const block of sql.match(/model_coefficients[\s\S]{0,400}?check \(model in \([^)]*\)/gi) ?? []) {
+        expect(block, `${file} must not add rolling_mean to model_coefficients`).not.toContain('rolling_mean');
       }
     }
   });

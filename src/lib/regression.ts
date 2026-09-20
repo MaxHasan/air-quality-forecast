@@ -217,3 +217,59 @@ export function meanAbsoluteError(pairs: readonly { predicted: number; actual: n
   if (usable.length === 0) return null;
   return usable.reduce((acc, p) => acc + Math.abs(p.predicted - p.actual), 0) / usable.length;
 }
+
+/** The outcome of comparing two models on the same days. */
+export interface MaeDifference {
+  /** Days both models predicted. */
+  n: number;
+  /** `MAE(a) - MAE(b)`. Negative means `a` is the better model. */
+  difference: number;
+  /**
+   * Standard error of that difference, from the spread of the PAIRED
+   * per-day differences. `null` below n = 2, where a spread is undefined.
+   */
+  stdError: number | null;
+}
+
+/**
+ * Paired MAE difference with its standard error.
+ *
+ * Why paired and not two independent MAEs: on a holdout of a few hundred days
+ * the between-day variation in "how hard was today to forecast" dwarfs the
+ * between-model variation, and it is COMMON to both models. Differencing day by
+ * day cancels it. The unpaired comparison would report a standard error several
+ * times too large and call every real difference noise.
+ *
+ * What it is for: deciding whether a gap between two window lengths is a finding
+ * or a coin flip. A difference smaller than about two of these standard errors
+ * is not evidence, and the backtest that chooses the rolling window prints this
+ * column next to every MAE precisely so the choice is not made on a gap the
+ * data cannot resolve.
+ *
+ * `a[i]` and `b[i]` must be the same day — the caller aligns them. Arrays of
+ * different lengths, or any non-finite value, return `null` rather than a
+ * number computed from a silent misalignment.
+ */
+export function maeDifference(
+  a: readonly { predicted: number; actual: number }[],
+  b: readonly { predicted: number; actual: number }[],
+): MaeDifference | null {
+  if (a.length !== b.length || a.length === 0) return null;
+
+  const diffs: number[] = [];
+  for (let i = 0; i < a.length; i += 1) {
+    const { predicted: pa, actual: aa } = a[i];
+    const { predicted: pb, actual: ab } = b[i];
+    if (!Number.isFinite(pa) || !Number.isFinite(aa) || !Number.isFinite(pb) || !Number.isFinite(ab)) return null;
+    diffs.push(Math.abs(pa - aa) - Math.abs(pb - ab));
+  }
+
+  const n = diffs.length;
+  const difference = diffs.reduce((s, d) => s + d, 0) / n;
+  if (n < 2) return { n, difference, stdError: null };
+
+  // Sample variance with the n-1 denominator, then the SE of the mean.
+  const ss = diffs.reduce((s, d) => s + (d - difference) ** 2, 0);
+  const stdError = Math.sqrt(ss / (n - 1) / n);
+  return { n, difference, stdError: Number.isFinite(stdError) ? stdError : null };
+}

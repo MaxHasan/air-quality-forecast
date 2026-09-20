@@ -83,14 +83,37 @@ export type WeatherSource = 'openmeteo' | 'datagovsg' | 'bmkg';
 export type AqiTableId = 'epa-pre-2024' | 'epa-2024';
 
 /**
- * The three competing predictors. Order matters: it is the cold-start
- * preference used when `model_accuracy` has too few scored days (n < 7) to pick
- * a winner on MAE.
+ * The four competing predictors.
+ *
+ * `rolling_mean` joined in 2026-09 alongside the rolling-lag respecification
+ * (migration 0008). It has no fitted coefficients, which is what lets it run
+ * for every location including Bali and Singapore, where `wind_regression`
+ * cannot.
  */
-export type ModelName = 'wind_regression' | 'cams' | 'persistence';
+export type ModelName = 'wind_regression' | 'cams' | 'persistence' | 'rolling_mean';
 
-/** Cold-start fallback order for the headline model. */
-export const MODEL_FALLBACK_ORDER: readonly ModelName[] = ['wind_regression', 'cams', 'persistence'] as const;
+/**
+ * Cold-start fallback order for the headline model, used when `model_accuracy`
+ * has too few scored days (n < MIN_SCORED_DAYS_FOR_RANKING) to pick a winner on
+ * MAE. It is also the render order in the model strip and the forecast fan.
+ *
+ * `rolling_mean` is APPENDED rather than inserted on merit. On the 2026-09
+ * holdout it was the strongest model at every horizon and both locations
+ * (docs/backtests/2026-09-rolling-lag.md) — which is an argument for watching
+ * it, not for crowning it here. This list is what the app falls back to when it
+ * has NOT measured anything yet, and a backtest against a perfect wind forecast
+ * on one 2023 season is not the measurement. `model_accuracy` promotes it the
+ * moment it earns 7 scored days.
+ *
+ * Index 0 is load-bearing: tests/queries.test.ts asserts the cold-start
+ * headline is MODEL_FALLBACK_ORDER[0].
+ */
+export const MODEL_FALLBACK_ORDER: readonly ModelName[] = [
+  'wind_regression',
+  'cams',
+  'persistence',
+  'rolling_mean',
+] as const;
 
 /** Prediction horizon in days ahead of the issue date. */
 export type HorizonDays = 1 | 2 | 3;
@@ -302,6 +325,66 @@ export interface PredictionInputs {
   source_date?: LocalDate;
   /** Set when the regression's raw output was negative and got clamped to 0. */
   clamped?: boolean;
+
+  /* -- the rolling lag (2026-09) ------------------------------------------ */
+  /**
+   * `rolling_mean`: calendar span of the window in days back from the issue
+   * date. For `wind_regression` see `pm25_lag_window_days` — they are resolved
+   * from different places and are allowed to differ.
+   */
+  window_days?: number;
+  /** Complete days actually averaged. Less than `window_days` means a degraded window. */
+  days_used?: number;
+  /**
+   * `window_days - days_used`. The field that makes a degraded window auditable
+   * after the fact: the window never stretches to fill a gap, so a mean taken
+   * over fewer days is a weaker estimate that still produced a forecast, and
+   * this is the only record that it did.
+   */
+  gap_days?: number;
+  /** Oldest local date the window could have included — `asOf - window_days`. */
+  window_start?: LocalDate;
+  /** Newest local date the window could have included — always `asOf - 1`. */
+  window_end?: LocalDate;
+  /**
+   * `persistence`: whole days from the anchor day to the issue date. 1 is
+   * yesterday; anything larger means the feed was down and the benchmark is
+   * carrying a stale day forward.
+   */
+  anchor_age_days?: number;
+  /** `persistence`: set when no complete day existed and a thin one was used. */
+  thin_anchor?: boolean;
+  /**
+   * Today's partial daily mean at run time, recorded on every row and used by
+   * none of them.
+   *
+   * This is the field that distinguishes the fixed behaviour from the bug:
+   * before 2026-09 this number WAS the anchor and the regression's lag. Storing
+   * it makes "the run saw a 19-hour mean for today and did not use it" a fact
+   * in the data rather than a claim in a commit message.
+   */
+  partial_today_pm25?: number;
+  /** Hours behind `partial_today_pm25`. ~19 under the 19:37 WIB schedule. */
+  partial_today_hours?: number;
+
+  /* -- wind_regression's lag --------------------------------------------- */
+  /** The value fed to the `pm25_lag` predictor. */
+  pm25_lag?: number;
+  /**
+   * Window used for `pm25_lag`, read from the coefficient row's
+   * `stats.lag_window_days` — NOT from a constant in the code. A slope is only
+   * correct for the lag definition it was fitted on, so the definition travels
+   * with the coefficients, and predict.ts refuses a row that does not declare
+   * one.
+   */
+  pm25_lag_window_days?: number;
+  /** Complete days behind `pm25_lag`, and the gap in its window. */
+  pm25_lag_days_used?: number;
+  pm25_lag_gap_days?: number;
+  /** Oldest/newest local dates the `pm25_lag` window covered. */
+  pm25_lag_window_start?: LocalDate;
+  pm25_lag_window_end?: LocalDate;
+
   [key: string]: Json | undefined;
 }
 
